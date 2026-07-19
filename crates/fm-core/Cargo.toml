@@ -1,0 +1,16 @@
+[package]
+name = "fm-core"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+description = "Platform-agnostic core for the two-panel file manager: fs engine, navigation/selection state machine, file-operation pipeline, config, and plugin extension points. Must not depend on Tauri."
+
+[dependencies]
+serde = { workspace = true }
+# specta lets the IPC DTOs export to TypeScript. It is a type-export library,
+# not a UI/webview concern, so it does not violate the swappable-frontend rule.
+specta = { workspace = true }
+
+# NOTE: `tauri` is intentionally absent here and must stay that way. `cargo tree
+# -p fm-core` showing no tauri is the structural proof of the swappable-frontend
+# boundary (SPEC §3 / CLAUDE.md non-negotiable rules).

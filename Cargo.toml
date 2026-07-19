@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["crates/fm-core", "src-tauri"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT"
+
+# Shared dependency versions so the core and the Tauri adapter agree on the
+# serialization/type-export stack that defines the IPC contract.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta-typescript = "=0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }

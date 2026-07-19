@@ -1,0 +1,58 @@
+//! Extension points (SPEC §6a).
+//!
+//! The app is modular from day one: even in-tree features (terminal, viewer/
+//! editor, archive support) are meant to be written against these same traits, so
+//! the extension system is dogfooded rather than bolted on later. Phase 1 defines
+//! the traits only — there is **no plugin loader and no WASM host yet** (those
+//! arrive in Phase 5 as a versioned, capability-gated public API).
+//!
+//! Keeping these as a stable, documented internal contract now is what lets
+//! third-party plugins later avoid breaking on every release.
+
+use crate::types::Entry;
+
+/// A bindable command that can appear in a command palette (§6a).
+pub trait Command {
+    /// Stable identifier, e.g. `"panel.toggle_hidden"`.
+    fn id(&self) -> &str;
+    /// Human-readable title for the command palette.
+    fn title(&self) -> &str;
+    // fn run(&self, ctx: &mut CommandCtx) -> Result<(), OpError>;  // (later)
+}
+
+/// Custom view / edit / open / preview behaviour for a file type — e.g. an image
+/// previewer, a hex viewer, or an archive-as-virtual-directory provider (§6a).
+pub trait FileTypeHandler {
+    /// Whether this handler claims the given entry.
+    fn handles(&self, entry: &Entry) -> bool;
+}
+
+/// Contributes an extra panel column / metadata cell, e.g. git status or a
+/// checksum (§6a).
+pub trait ColumnProvider {
+    fn id(&self) -> &str;
+    /// Column header label.
+    fn header(&self) -> &str;
+    /// Cell text for a given entry.
+    fn cell(&self, entry: &Entry) -> String;
+}
+
+/// A custom operation registered against the file-operation pipeline, e.g.
+/// "compress selection" (§6a). Integrates with [`crate::ops`].
+pub trait Operation {
+    fn id(&self) -> &str;
+}
+
+/// Contributes a theme (colors, fonts, transparency) (§6a / §7).
+pub trait ThemeProvider {
+    fn id(&self) -> &str;
+}
+
+/// **Phase-2 seam.** Where an executable's stdout/stderr is routed when the user
+/// runs it (§5.5 / §5.7). Phase 1 wires this to a simple modal output sink;
+/// Phase 2 swaps in the PTY-backed terminal without changing callers, so
+/// Enter-to-execute and the Esc terminal curtain slot in cleanly.
+pub trait ExecutionSink {
+    /// Append output bytes from the running process.
+    fn write(&mut self, bytes: &[u8]);
+}

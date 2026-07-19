@@ -1,0 +1,37 @@
+/* Terminal-flavored, calm defaults. Theming is config-driven in the core
+   (SPEC §4/§7); these CSS variables are the render-side surface a theme maps to.
+   Ships with a dark default and a light variant via prefers-color-scheme. */
+
+:root {
+  --bg: #1e1e22;
+  --bg-alt: #26262b;
+  --fg: #d8d8dc;
+  --fg-dim: #8a8a92;
+  --border: #34343a;
+  --accent: #3b7dd8;
+  --accent-fg: #ffffff;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fbfbfa;
+    --bg-alt: #f0f0ee;
+    --fg: #23232a;
+    --fg-dim: #6a6a72;
+    --border: #dcdcd8;
+    --accent: #2f6fce;
+    --accent-fg: #ffffff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
