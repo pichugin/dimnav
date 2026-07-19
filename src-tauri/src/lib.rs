@@ -23,6 +23,7 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::init,
             commands::set_viewport,
             commands::move_cursor,
+            commands::set_cursor,
             commands::set_active_panel,
             commands::toggle_selection,
             commands::select_and_move,

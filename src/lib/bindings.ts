@@ -28,6 +28,12 @@ export const commands = {
 	setViewport: (panel: PanelId, columns: number, rows: number) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_viewport", { panel, columns, rows })),
 	/**  Apply a cursor motion (SPEC §5.2). Pure and instant — runs synchronously. */
 	moveCursor: (panel: PanelId, motion: Motion) => typedError<AppSnapshot, string>(__TAURI_INVOKE("move_cursor", { panel, motion })),
+	/**
+	 *  Move a panel's cursor to an explicit entry index (SPEC §5.2). Backs mouse-click
+	 *  focus: the frontend reports the clicked entry's global index; the core clamps
+	 *  and owns the resulting cursor position. Pure and instant — runs synchronously.
+	 */
+	setCursor: (panel: PanelId, index: number) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_cursor", { panel, index })),
 	/**  Set the active (focused) panel (SPEC §5.1). */
 	setActivePanel: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_active_panel", { panel })),
 	/**  Toggle selection of the entry under the cursor (Space). `..` is a no-op. */

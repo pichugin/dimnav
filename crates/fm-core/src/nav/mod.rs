@@ -65,6 +65,14 @@ pub fn set_listing(state: &mut PanelState, listing: DirListing) {
     state.selection.clear();
 }
 
+/// Move the cursor to an explicit index, clamped to `[0, len-1]` (0 when empty).
+/// Backs mouse-click focus: the frontend reports the clicked entry's global index
+/// and the core owns the resulting cursor position, same as [`move_cursor`].
+pub fn set_cursor(state: &mut PanelState, index: usize) {
+    let len = state.entries.len();
+    state.cursor_index = if len == 0 { 0 } else { index.min(len - 1) };
+}
+
 /// Move the cursor onto the entry with the given name, if present. Used for the
 /// "auto-position onto the folder just exited" rule when going to a parent (§5.2).
 pub fn position_on(state: &mut PanelState, name: &str) {
@@ -92,9 +100,12 @@ fn is_selectable(entry: &crate::types::Entry) -> bool {
     entry.name != ".."
 }
 
-/// Toggle selection of the entry under the cursor (§5.3). Selection is a separate
-/// layer from the cursor and persists as the cursor moves. `..` is never
-/// selectable, so toggling it is a no-op.
+/// Toggle selection of the entry under the cursor, then advance the cursor to the
+/// next entry (classic Norton Commander "Space to mark and step down"). Selection
+/// is a separate layer from the cursor and persists as the cursor moves (§5.3).
+/// On the last entry the cursor stays put (`Down` clamps). `..` is never
+/// selectable, so toggling it is a no-op — and, having nothing to mark, does not
+/// move the cursor either.
 pub fn toggle_selection(state: &mut PanelState) {
     let idx = state.cursor_index;
     match state.entries.get(idx) {
@@ -106,6 +117,7 @@ pub fn toggle_selection(state: &mut PanelState) {
     } else {
         state.selection.push(idx);
     }
+    move_cursor(state, Motion::Down);
 }
 
 /// Add the entry under the cursor to the selection (if selectable and not already
@@ -288,17 +300,43 @@ mod tests {
 
     #[test]
     fn toggle_selection_adds_then_removes_and_skips_dotdot() {
-        let mut p = panel_with_dotdot(3);
-        // Cursor on '..' -> no-op.
+        let mut p = panel_with_dotdot(3); // indices 0(..),1,2,3
+        // Cursor on '..' -> no-op, and the cursor does not advance.
         p.cursor_index = 0;
         toggle_selection(&mut p);
         assert!(p.selection.is_empty());
-        // Cursor on a real file -> select, then toggle off.
+        assert_eq!(p.cursor_index, 0);
+        // Cursor on a real file -> select and step down (§5.3, NC behavior).
         p.cursor_index = 2;
         toggle_selection(&mut p);
         assert_eq!(p.selection, vec![2]);
+        assert_eq!(p.cursor_index, 3);
+        // Step back onto it and toggle off; the cursor advances again.
+        p.cursor_index = 2;
         toggle_selection(&mut p);
         assert!(p.selection.is_empty());
+        assert_eq!(p.cursor_index, 3);
+    }
+
+    #[test]
+    fn toggle_selection_on_last_entry_keeps_cursor() {
+        let mut p = panel_with_dotdot(3); // indices 0(..),1,2,3; last = 3
+        p.cursor_index = 3;
+        toggle_selection(&mut p);
+        assert_eq!(p.selection, vec![3]); // still marked
+        assert_eq!(p.cursor_index, 3); // Down clamps at the last entry
+    }
+
+    #[test]
+    fn set_cursor_clamps_in_range_past_end_and_empty() {
+        let mut p = panel_with_dotdot(3); // len 4, last = 3
+        set_cursor(&mut p, 2);
+        assert_eq!(p.cursor_index, 2);
+        set_cursor(&mut p, 99);
+        assert_eq!(p.cursor_index, 3); // clamped to last
+        let mut empty = panel(0, 2, 3);
+        set_cursor(&mut empty, 5);
+        assert_eq!(empty.cursor_index, 0); // empty -> 0
     }
 
     #[test]

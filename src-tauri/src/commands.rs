@@ -124,6 +124,21 @@ pub fn move_cursor(
     Ok(s.snapshot())
 }
 
+/// Move a panel's cursor to an explicit entry index (SPEC §5.2). Backs mouse-click
+/// focus: the frontend reports the clicked entry's global index; the core clamps
+/// and owns the resulting cursor position. Pure and instant — runs synchronously.
+#[tauri::command]
+#[specta::specta]
+pub fn set_cursor(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+    index: usize,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::set_cursor(s.panel_mut(panel), index);
+    Ok(s.snapshot())
+}
+
 /// Set the active (focused) panel (SPEC §5.1).
 #[tauri::command]
 #[specta::specta]

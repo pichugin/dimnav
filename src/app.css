@@ -11,6 +11,16 @@
   --accent: #3b7dd8;
   --accent-fg: #ffffff;
 
+  /* Per-entry listing colors (SPEC §4/§7 — theme-swappable). */
+  --file-dir: #6fb3e0; /* folders: light blue */
+  --file-symlink: #a6d8ff; /* symlinks: bright light blue, lighter than folders */
+  --file-hidden: #8a8a92; /* dotfiles: grey, still legible on dark bg */
+  --file-doc: #c98a6a; /* .md/.txt: brownish-red */
+  --file-exec: #8fd18f; /* executables: light green */
+  --file-data: #4f8f6b; /* .xml/.json: dark green */
+  --file-code: var(--accent); /* source code: the classic selection blue */
+  --file-selected: #ffd633; /* selected rows: bright yellow */
+
   color-scheme: light dark;
 }
 
@@ -23,6 +33,16 @@
     --border: #dcdcd8;
     --accent: #2f6fce;
     --accent-fg: #ffffff;
+
+    /* Darker variants for contrast on the light background. */
+    --file-dir: #2f6fce;
+    --file-symlink: #5a9fe0;
+    --file-hidden: #8a8a92;
+    --file-doc: #a85a3a;
+    --file-exec: #3f9b52;
+    --file-data: #2f6b4a;
+    --file-code: var(--accent);
+    --file-selected: #a67c00;
   }
 }
 

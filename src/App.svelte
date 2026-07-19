@@ -111,6 +111,30 @@
     );
   }
 
+  // The listing color class for an entry (SPEC §4 theming). Pure presentation —
+  // first match wins, with hidden taking precedence over folder/type so the
+  // requested "hidden files/folders are grey" holds even for dotfolders. Values
+  // live in CSS custom properties (app.css) so a theme can remap them.
+  // Source-code extensions share the classic selection-blue (--file-code).
+  const CODE_EXTS = new Set([
+    "c", "h", "cc", "cxx", "cpp", "hpp", "hh", "rs", "ts", "tsx", "js", "jsx",
+    "mjs", "cjs", "java", "go", "py", "rb", "swift", "kt", "cs", "php", "sh",
+  ]);
+
+  function entryClass(e: Entry): string {
+    if (e.marker === "denied" || e.marker === "broken") return ""; // own styling
+    if (e.name !== ".." && e.name.startsWith(".")) return "c-hidden";
+    if (e.kind === "dir") return "c-dir";
+    if (e.kind === "symlink") return "c-symlink";
+    if (e.is_executable) return "c-exec";
+    const dot = e.name.lastIndexOf(".");
+    const ext = dot > 0 ? e.name.slice(dot + 1).toLowerCase() : "";
+    if (ext === "md" || ext === "txt") return "c-doc";
+    if (ext === "xml" || ext === "json") return "c-data";
+    if (CODE_EXTS.has(ext)) return "c-code";
+    return "";
+  }
+
   function label(e: Entry): string {
     if (e.marker === "denied") return `⚠ ${e.name}`;
     if (e.kind === "dir") return e.name === ".." ? ".." : `${e.name}/`;
@@ -159,6 +183,29 @@
   async function measureAll() {
     await measure("left");
     await measure("right");
+  }
+
+  // Mouse: single-click focuses the clicked entry (and activates its panel). The
+  // core owns the cursor index; we just report the clicked global index.
+  async function focusEntry(side: PanelId, index: number) {
+    try {
+      if (snapshot.active !== side) snapshot = await nav.setActivePanel(side);
+      snapshot = await nav.setCursor(side, index);
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  // Mouse: double-click behaves like Enter — focus the entry, then navigate into
+  // it (dir/`..`); files are a no-op until the open-files slice.
+  async function openEntry(side: PanelId, index: number) {
+    try {
+      if (snapshot.active !== side) snapshot = await nav.setActivePanel(side);
+      snapshot = await nav.setCursor(side, index);
+      snapshot = await nav.navigate(side, { kind: "into" });
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
   }
 
   // Open the F5/F6 destination prompt, pre-filled with the *inactive* panel's
@@ -515,11 +562,14 @@
           {#each L.pageEntries as entry, i}
             {@const gi = L.pageStart + i}
             <div
-              class="row kind-{entry.kind}"
+              class="row kind-{entry.kind} {entryClass(entry)}"
               class:cursor={gi === p.cursor_index}
               class:inactive={snapshot.active !== side}
               class:selected={p.selection.includes(gi)}
               class:denied={entry.marker === "denied"}
+              role="presentation"
+              onclick={(e) => { e.stopPropagation(); void focusEntry(side, gi); }}
+              ondblclick={(e) => { e.stopPropagation(); void openEntry(side, gi); }}
             >
               {label(entry)}
             </div>
@@ -749,17 +799,39 @@
     text-overflow: ellipsis;
   }
   .row.kind-dir {
-    color: var(--fg);
     font-weight: 600;
   }
   .row.kind-symlink {
     font-style: italic;
   }
+  /* Per-entry colors (§4). Listed before selected/cursor so those override at
+     equal specificity, keeping the active-row highlight readable. */
+  .row.c-dir {
+    color: var(--file-dir);
+  }
+  .row.c-symlink {
+    color: var(--file-symlink);
+  }
+  .row.c-hidden {
+    color: var(--file-hidden);
+  }
+  .row.c-doc {
+    color: var(--file-doc);
+  }
+  .row.c-exec {
+    color: var(--file-exec);
+  }
+  .row.c-data {
+    color: var(--file-data);
+  }
+  .row.c-code {
+    color: var(--file-code);
+  }
   .row.denied {
     color: #d86b6b;
   }
   .row.selected {
-    color: var(--accent);
+    color: var(--file-selected);
   }
   .row.cursor {
     background: var(--accent);

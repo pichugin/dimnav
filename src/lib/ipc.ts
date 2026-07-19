@@ -62,6 +62,8 @@ export const nav = {
     unwrap(commands.setViewport(panel, columns, rows)),
   moveCursor: (panel: PanelId, motion: Motion) =>
     unwrap(commands.moveCursor(panel, motion)),
+  setCursor: (panel: PanelId, index: number) =>
+    unwrap(commands.setCursor(panel, index)),
   setActivePanel: (panel: PanelId) => unwrap(commands.setActivePanel(panel)),
   navigate: (panel: PanelId, target: NavTarget) =>
     unwrap(commands.navigate(panel, target)),
