@@ -52,4 +52,10 @@ export const nav = {
     unwrap(commands.navigate(panel, target)),
   refresh: (panel: PanelId) => unwrap(commands.refresh(panel)),
   getKeymap: () => commands.getKeymap(),
+  // Selection (§5.3)
+  toggleSelection: (panel: PanelId) => unwrap(commands.toggleSelection(panel)),
+  selectAndMove: (panel: PanelId, motion: Motion) =>
+    unwrap(commands.selectAndMove(panel, motion)),
+  selectAll: (panel: PanelId) => unwrap(commands.selectAll(panel)),
+  deselectAll: (panel: PanelId) => unwrap(commands.deselectAll(panel)),
 };

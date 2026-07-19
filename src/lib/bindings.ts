@@ -30,6 +30,14 @@ export const commands = {
 	moveCursor: (panel: PanelId, motion: Motion) => typedError<AppSnapshot, string>(__TAURI_INVOKE("move_cursor", { panel, motion })),
 	/**  Set the active (focused) panel (SPEC §5.1). */
 	setActivePanel: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_active_panel", { panel })),
+	/**  Toggle selection of the entry under the cursor (Space). `..` is a no-op. */
+	toggleSelection: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("toggle_selection", { panel })),
+	/**  Additively select the entry under the cursor, then move (Shift+Arrow). */
+	selectAndMove: (panel: PanelId, motion: Motion) => typedError<AppSnapshot, string>(__TAURI_INVOKE("select_and_move", { panel, motion })),
+	/**  Select all selectable entries in the panel (`*`). */
+	selectAll: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("select_all", { panel })),
+	/**  Clear the panel's selection (`-`). */
+	deselectAll: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("deselect_all", { panel })),
 	/**
 	 *  Navigate a panel: into the entry under the cursor, up to the parent (with the
 	 *  auto-position-on-exited-folder rule, §5.2), or to an explicit path.

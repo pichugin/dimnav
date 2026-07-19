@@ -22,16 +22,20 @@ pub fn save(config: &Config) {
     let _ = config;
 }
 
-/// The default keymap for the navigation slice, sourced from the core so the
-/// webview never hardcodes keys (SPEC §6). `keys` are frontend `KeyboardEvent.key`
-/// values. Remapping, persistence, and conflict detection are a later slice; the
-/// broader action set (F-keys, selection, etc.) joins as those slices land.
+/// The default keymap, sourced from the core so the webview never hardcodes keys
+/// (SPEC §6). `keys` are **chord strings** the frontend builds from a
+/// `KeyboardEvent`: modifiers in the fixed order `Ctrl+Meta+Alt+Shift+<key>`,
+/// where `<key>` is `KeyboardEvent.key`. `Shift` is only present for named keys
+/// (e.g. `Shift+ArrowDown`); for printable keys the shift is already baked into
+/// the character (`*` is `Shift+8` but reports as `"*"`). Remapping, persistence,
+/// and conflict detection are a later slice.
 pub fn default_keymap() -> Vec<KeyBinding> {
     let bind = |action: &str, keys: &[&str]| KeyBinding {
         action: action.to_string(),
         keys: keys.iter().map(|k| k.to_string()).collect(),
     };
     vec![
+        // Cursor motion (§5.2).
         bind("cursor.up", &["ArrowUp"]),
         bind("cursor.down", &["ArrowDown"]),
         bind("cursor.left", &["ArrowLeft"]),
@@ -40,8 +44,17 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         bind("cursor.page_down", &["PageDown"]),
         bind("cursor.home", &["Home"]),
         bind("cursor.end", &["End"]),
+        // Panels & directory navigation.
         bind("panel.switch", &["Tab"]),
         bind("nav.enter", &["Enter"]),
         bind("nav.parent", &["Backspace"]),
+        // Selection (§5.3).
+        bind("selection.toggle", &[" "]),
+        bind("selection.all", &["*"]),
+        bind("selection.none", &["-"]),
+        bind("select.up", &["Shift+ArrowUp"]),
+        bind("select.down", &["Shift+ArrowDown"]),
+        bind("select.left", &["Shift+ArrowLeft"]),
+        bind("select.right", &["Shift+ArrowRight"]),
     ]
 }

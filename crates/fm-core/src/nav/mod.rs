@@ -87,16 +87,55 @@ pub fn child_name(path: &str) -> Option<String> {
         .map(|n| n.to_string_lossy().into_owned())
 }
 
+/// Whether an entry can be selected. The synthetic `..` never is (§5.3).
+fn is_selectable(entry: &crate::types::Entry) -> bool {
+    entry.name != ".."
+}
+
 /// Toggle selection of the entry under the cursor (§5.3). Selection is a separate
-/// layer from the cursor and persists as the cursor moves. (Wired in a later
-/// slice; kept here as the model's home.)
+/// layer from the cursor and persists as the cursor moves. `..` is never
+/// selectable, so toggling it is a no-op.
 pub fn toggle_selection(state: &mut PanelState) {
     let idx = state.cursor_index;
+    match state.entries.get(idx) {
+        Some(e) if is_selectable(e) => {}
+        _ => return,
+    }
     if let Some(pos) = state.selection.iter().position(|&i| i == idx) {
         state.selection.remove(pos);
     } else {
         state.selection.push(idx);
     }
+}
+
+/// Add the entry under the cursor to the selection (if selectable and not already
+/// selected), then move the cursor. Backs the Shift+Arrow "select while moving"
+/// gesture (§5.3) — additive only; deselection is Space or `deselect_all`.
+pub fn select_and_move(state: &mut PanelState, motion: Motion) {
+    let idx = state.cursor_index;
+    if let Some(e) = state.entries.get(idx) {
+        if is_selectable(e) && !state.selection.contains(&idx) {
+            state.selection.push(idx);
+        }
+    }
+    move_cursor(state, motion);
+}
+
+/// Select every selectable entry in the panel — all files/folders except `..`
+/// (§5.3, the `*` action).
+pub fn select_all(state: &mut PanelState) {
+    state.selection = state
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| is_selectable(e))
+        .map(|(i, _)| i)
+        .collect();
+}
+
+/// Clear the selection (§5.3, the `-` action).
+pub fn deselect_all(state: &mut PanelState) {
+    state.selection.clear();
 }
 
 #[cfg(test)]
@@ -235,5 +274,66 @@ mod tests {
         assert_eq!(parent_of("/a/b/c").as_deref(), Some("/a/b"));
         assert_eq!(child_name("/a/b/c").as_deref(), Some("c"));
         assert_eq!(parent_of("/"), None);
+    }
+
+    /// Panel whose entry 0 is `..`, followed by `n` files.
+    fn panel_with_dotdot(n: usize) -> PanelState {
+        let mut entries = vec![ent("..", EntryKind::Dir)];
+        entries.extend((0..n).map(|i| ent(&i.to_string(), EntryKind::File)));
+        PanelState {
+            entries,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn toggle_selection_adds_then_removes_and_skips_dotdot() {
+        let mut p = panel_with_dotdot(3);
+        // Cursor on '..' -> no-op.
+        p.cursor_index = 0;
+        toggle_selection(&mut p);
+        assert!(p.selection.is_empty());
+        // Cursor on a real file -> select, then toggle off.
+        p.cursor_index = 2;
+        toggle_selection(&mut p);
+        assert_eq!(p.selection, vec![2]);
+        toggle_selection(&mut p);
+        assert!(p.selection.is_empty());
+    }
+
+    #[test]
+    fn select_all_excludes_dotdot_and_deselect_clears() {
+        let mut p = panel_with_dotdot(3); // indices 0(..),1,2,3
+        select_all(&mut p);
+        assert_eq!(p.selection, vec![1, 2, 3]);
+        deselect_all(&mut p);
+        assert!(p.selection.is_empty());
+    }
+
+    #[test]
+    fn select_and_move_adds_current_then_advances_idempotently() {
+        let mut p = panel_with_dotdot(3);
+        p.geometry = PanelGeometry {
+            columns: 1,
+            rows_per_column: 10,
+        };
+        p.cursor_index = 1;
+        select_and_move(&mut p, Motion::Down);
+        assert_eq!(p.selection, vec![1]);
+        assert_eq!(p.cursor_index, 2);
+        // Re-selecting an already-selected index does not duplicate it.
+        p.cursor_index = 1;
+        select_and_move(&mut p, Motion::Down);
+        assert_eq!(p.selection, vec![1]);
+    }
+
+    #[test]
+    fn selection_survives_cursor_movement() {
+        let mut p = panel_with_dotdot(5);
+        p.cursor_index = 2;
+        toggle_selection(&mut p);
+        move_cursor(&mut p, Motion::Down);
+        move_cursor(&mut p, Motion::Down);
+        assert_eq!(p.selection, vec![2]); // unchanged by navigation
     }
 }

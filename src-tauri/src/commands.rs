@@ -130,6 +130,51 @@ pub fn set_active_panel(
     Ok(s.snapshot())
 }
 
+// --- Selection (§5.3) -------------------------------------------------------
+
+/// Toggle selection of the entry under the cursor (Space). `..` is a no-op.
+#[tauri::command]
+#[specta::specta]
+pub fn toggle_selection(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::toggle_selection(s.panel_mut(panel));
+    Ok(s.snapshot())
+}
+
+/// Additively select the entry under the cursor, then move (Shift+Arrow).
+#[tauri::command]
+#[specta::specta]
+pub fn select_and_move(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+    motion: Motion,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::select_and_move(s.panel_mut(panel), motion);
+    Ok(s.snapshot())
+}
+
+/// Select all selectable entries in the panel (`*`).
+#[tauri::command]
+#[specta::specta]
+pub fn select_all(state: State<'_, SharedState>, panel: PanelId) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::select_all(s.panel_mut(panel));
+    Ok(s.snapshot())
+}
+
+/// Clear the panel's selection (`-`).
+#[tauri::command]
+#[specta::specta]
+pub fn deselect_all(state: State<'_, SharedState>, panel: PanelId) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::deselect_all(s.panel_mut(panel));
+    Ok(s.snapshot())
+}
+
 /// Navigate a panel: into the entry under the cursor, up to the parent (with the
 /// auto-position-on-exited-folder rule, §5.2), or to an explicit path.
 #[tauri::command]

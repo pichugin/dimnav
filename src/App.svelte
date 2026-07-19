@@ -36,9 +36,23 @@
   });
   let status = $state("starting…");
 
-  // key (KeyboardEvent.key) -> action id, built from the core-provided keymap.
-  let keymapByKey: Record<string, string> = {};
+  // chord string -> action id, built from the core-provided keymap.
+  let keymapByChord: Record<string, string> = {};
   const listingEls: Record<PanelId, HTMLElement | null> = { left: null, right: null };
+
+  // Canonical chord for a KeyboardEvent: modifiers in a fixed order, then the
+  // key. Shift is only added for named keys (length > 1) — for printable keys the
+  // shift is already baked into the character (e.g. `*` reports as "*"). Must
+  // match the format produced by the core keymap (config::default_keymap).
+  function chord(e: KeyboardEvent): string {
+    const parts: string[] = [];
+    if (e.ctrlKey) parts.push("Ctrl");
+    if (e.metaKey) parts.push("Meta");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey && e.key.length > 1) parts.push("Shift");
+    parts.push(e.key);
+    return parts.join("+");
+  }
 
   function colsOf(vm: ViewMode): number {
     return vm.kind === "columns" ? vm.columns : 1;
@@ -71,6 +85,21 @@
     return e.name;
   }
 
+  function humanSize(bytes: number): string {
+    const u = ["B", "K", "M", "G", "T"];
+    let n = bytes;
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) {
+      n /= 1024;
+      i++;
+    }
+    return `${i === 0 ? n : n.toFixed(1)}${u[i]}`;
+  }
+
+  function selectedSize(p: PanelState): number {
+    return p.selection.reduce((sum, i) => sum + (p.entries[i]?.size ?? 0), 0);
+  }
+
   function buildKeymap(bindings: KeyBinding[]): Record<string, string> {
     const map: Record<string, string> = {};
     for (const b of bindings) for (const k of b.keys) map[k] = b.action;
@@ -90,13 +119,21 @@
   }
 
   async function onKeydown(e: KeyboardEvent) {
-    const action = keymapByKey[e.key];
+    const action = keymapByChord[chord(e)];
     if (!action) return;
     e.preventDefault();
     const active = snapshot.active;
     try {
       if (action.startsWith("cursor.")) {
         snapshot = await nav.moveCursor(active, action.slice("cursor.".length) as Motion);
+      } else if (action.startsWith("select.")) {
+        snapshot = await nav.selectAndMove(active, action.slice("select.".length) as Motion);
+      } else if (action === "selection.toggle") {
+        snapshot = await nav.toggleSelection(active);
+      } else if (action === "selection.all") {
+        snapshot = await nav.selectAll(active);
+      } else if (action === "selection.none") {
+        snapshot = await nav.deselectAll(active);
       } else if (action === "panel.switch") {
         snapshot = await nav.setActivePanel(active === "left" ? "right" : "left");
       } else if (action === "nav.enter") {
@@ -113,7 +150,7 @@
     let ro: ResizeObserver | undefined;
     (async () => {
       try {
-        keymapByKey = buildKeymap(await nav.getKeymap());
+        keymapByChord = buildKeymap(await nav.getKeymap());
         snapshot = await nav.init();
         await tick();
         await measureAll();
@@ -172,7 +209,9 @@
         </div>
 
         <footer class="panel-foot">
-          <span>{p.selection.length} selected</span>
+          <span>
+            {p.selection.length} selected{p.selection.length ? ` · ${humanSize(selectedSize(p))}` : ""}
+          </span>
           <span>{p.entries.length ? p.cursor_index + 1 : 0} / {p.entries.length}</span>
         </footer>
       </section>
@@ -182,7 +221,7 @@
   <!-- Phase 2 seam: the terminal command line lives here; Esc will draw the
        panels aside as a curtain over it (SPEC §5.7 / §6). -->
   <nav class="fkeys" aria-label="function keys">
-    {#each [["F3", "View"], ["F4", "Edit"], ["F5", "Copy"], ["F6", "Move"], ["F7", "MkDir"], ["F8", "Delete"], ["Tab", "Switch"], ["Enter", "Open"], ["⌫", "Up"]] as [key, name]}
+    {#each [["F3", "View"], ["F4", "Edit"], ["F5", "Copy"], ["F6", "Move"], ["F7", "MkDir"], ["F8", "Delete"], ["Space", "Select"], ["*", "All"], ["Tab", "Switch"], ["Enter", "Open"], ["⌫", "Up"]] as [key, name]}
       <span class="fkey"><b>{key}</b> {name}</span>
     {/each}
   </nav>
