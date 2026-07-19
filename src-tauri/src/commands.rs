@@ -8,14 +8,20 @@
 //! Filesystem reads run on a blocking thread pool and never hold the state lock
 //! across an `.await`, so the UI thread is never blocked (SPEC §5.4a).
 
-use std::path::Path;
-use std::sync::{Mutex, PoisonError};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use fm_core::state::AppState;
 use fm_core::types::{
-    AppSnapshot, Config, DirListing, EntryKind, KeyBinding, Motion, NavTarget, PanelId,
+    AppSnapshot, Config, DirListing, EntryKind, ErrorResolution, KeyBinding, Motion, NavTarget,
+    OpKind, OpRequest, PanelId, Resolution,
 };
-use tauri::State;
+use tauri::{AppHandle, State};
+use tauri_specta::Event;
+
+use crate::events::OpCompleteEvent;
+use crate::ops_runtime::{registry, OpRegistry, TauriObserver, UserInput};
 
 /// Tauri-managed shared navigation state.
 pub type SharedState = Mutex<AppState>;
@@ -269,4 +275,112 @@ pub async fn refresh(state: State<'_, SharedState>, panel: PanelId) -> Result<Ap
         fm_core::nav::position_on(p, &name);
     }
     Ok(s.snapshot())
+}
+
+// --- File operations: copy / move (§5.4a) -----------------------------------
+
+/// Begin a copy (F5) or move (F6) of the active panel's selection — or, when
+/// nothing is selected, the entry under the cursor (never `..`). `dest` is the
+/// editable destination from the F5/F6 prompt; it accepts `..`, relative, and
+/// absolute paths, resolved against the active panel's directory (§5.4a).
+///
+/// Registers the op, spawns the transfer on a background thread (never blocking
+/// the UI), and returns the `op_id` the frontend uses to correlate the progress /
+/// collision / error / complete events and to cancel.
+#[tauri::command]
+#[specta::specta]
+pub fn start_transfer(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    registry_state: State<'_, OpRegistry>,
+    kind: OpKind,
+    dest: String,
+) -> Result<String, String> {
+    // Build the request from the active panel while holding the lock, then drop it
+    // before any I/O.
+    let req = {
+        let s = state.lock().map_err(lock_err)?;
+        let p = s.panel(s.active);
+        let base = PathBuf::from(&p.path);
+
+        // Selection drives the op; empty selection falls back to the cursor entry.
+        let indices: Vec<usize> = if p.selection.is_empty() {
+            vec![p.cursor_index]
+        } else {
+            let mut v = p.selection.clone();
+            v.sort_unstable();
+            v
+        };
+
+        let sources: Vec<String> = indices
+            .into_iter()
+            .filter_map(|i| p.entries.get(i))
+            .filter(|e| e.name != "..")
+            .map(|e| base.join(&e.name).to_string_lossy().into_owned())
+            .collect();
+
+        let dest_path = fm_core::ops::resolve_dest(&base, &dest);
+        OpRequest {
+            kind,
+            sources,
+            dest: dest_path.to_string_lossy().into_owned(),
+        }
+    };
+
+    if req.sources.is_empty() {
+        return Err("nothing to transfer".to_string());
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel::<UserInput>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let op_id = registry_state.register(tx, cancel.clone());
+
+    let app = app.clone();
+    let thread_id = op_id.clone();
+    std::thread::spawn(move || {
+        let observer = TauriObserver {
+            app: app.clone(),
+            op_id: thread_id.clone(),
+            rx,
+            cancel,
+        };
+        let mut outcome = fm_core::ops::run_transfer(&req, &observer);
+        outcome.op_id = thread_id.clone();
+        let _ = OpCompleteEvent(outcome).emit(&app);
+        // Retire the op so late resolve_* calls fail cleanly.
+        registry(&app).remove(&thread_id);
+    });
+
+    Ok(op_id)
+}
+
+/// Answer a collision prompt for a running op (§5.4a).
+#[tauri::command]
+#[specta::specta]
+pub fn resolve_collision(
+    registry_state: State<'_, OpRegistry>,
+    op_id: String,
+    resolution: Resolution,
+) -> Result<(), String> {
+    registry_state.send(&op_id, UserInput::Collision(resolution))
+}
+
+/// Answer an error prompt for a running op — Retry / Skip / Skip All / Cancel /
+/// Elevate (§5.6).
+#[tauri::command]
+#[specta::specta]
+pub fn resolve_error(
+    registry_state: State<'_, OpRegistry>,
+    op_id: String,
+    resolution: ErrorResolution,
+) -> Result<(), String> {
+    registry_state.send(&op_id, UserInput::Error(resolution))
+}
+
+/// Request cancellation of a running op; the engine stops between items (§5.4a).
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_op(registry_state: State<'_, OpRegistry>, op_id: String) -> Result<(), String> {
+    registry_state.cancel(&op_id);
+    Ok(())
 }

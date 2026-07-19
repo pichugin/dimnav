@@ -6,9 +6,17 @@
 // Rust core — this is pure marshalling (SPEC §3).
 
 import { commands } from "./bindings";
-import type { AppSnapshot, Motion, NavTarget, PanelId } from "./bindings";
+import type {
+  AppSnapshot,
+  ErrorResolution,
+  Motion,
+  NavTarget,
+  OpKind,
+  PanelId,
+  Resolution,
+} from "./bindings";
 
-export { commands } from "./bindings";
+export { commands, events } from "./bindings";
 export type {
   AppSnapshot,
   PanelState,
@@ -25,6 +33,13 @@ export type {
   NavTarget,
   PanelId,
   KeyBinding,
+  OpKind,
+  Resolution,
+  ErrorResolution,
+  OpProgress,
+  OpOutcome,
+  CollisionPrompt,
+  OpErrorInfo,
 } from "./bindings";
 
 /** Result envelope produced by tauri-specta for `Result`-returning commands. */
@@ -58,4 +73,20 @@ export const nav = {
     unwrap(commands.selectAndMove(panel, motion)),
   selectAll: (panel: PanelId) => unwrap(commands.selectAll(panel)),
   deselectAll: (panel: PanelId) => unwrap(commands.deselectAll(panel)),
+};
+
+/**
+ * File-operation API (§5.4a). `startTransfer` kicks off a copy/move on the active
+ * panel's selection and returns an `op_id`; progress, collisions, errors, and
+ * completion arrive as events (see {@link events}). The `resolve*` calls answer a
+ * blocking prompt for a given op.
+ */
+export const ops = {
+  startTransfer: (kind: OpKind, dest: string) =>
+    unwrap(commands.startTransfer(kind, dest)),
+  resolveCollision: (opId: string, resolution: Resolution) =>
+    unwrap(commands.resolveCollision(opId, resolution)),
+  resolveError: (opId: string, resolution: ErrorResolution) =>
+    unwrap(commands.resolveError(opId, resolution)),
+  cancelOp: (opId: string) => unwrap(commands.cancelOp(opId)),
 };

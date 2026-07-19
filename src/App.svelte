@@ -1,15 +1,19 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { nav } from "./lib/ipc";
+  import { nav, ops, events } from "./lib/ipc";
   import type {
     AppSnapshot,
     Entry,
+    ErrorResolution,
     KeyBinding,
     Motion,
+    OpKind,
     PanelId,
     PanelState,
+    Resolution,
     ViewMode,
   } from "./lib/ipc";
+  import type { UnlistenFn } from "@tauri-apps/api/event";
 
   // Row height in px — single source of truth shared by the grid layout and the
   // viewport measurement, so the core's rows_per_column matches what's rendered.
@@ -35,6 +39,23 @@
     active: "left",
   });
   let status = $state("starting…");
+
+  // --- File-operation dialogs (§5.4a) ---------------------------------------
+  // The editable F5/F6 destination prompt, shown before an op starts.
+  type DestPrompt = { op: OpKind; value: string };
+  let destPrompt = $state<DestPrompt | null>(null);
+  // The running op's progress (driven by op-progress events).
+  type ActiveOp = { id: string; done: number; total: number; current: string };
+  let activeOp = $state<ActiveOp | null>(null);
+  // Id of the most recently completed op. A fast op can finish (and clear
+  // activeOp) before startTransfer's promise even resolves; this guards against a
+  // late progress/init event resurrecting a phantom modal for a done op.
+  let finishedOpId: string | null = null;
+  // A blocking prompt overlaying the progress modal, awaiting the user's answer.
+  type Prompt =
+    | { kind: "collision"; opId: string; path: string; multiple: boolean }
+    | { kind: "error"; opId: string; path: string; reason: string; offerElevate: boolean };
+  let prompt = $state<Prompt | null>(null);
 
   // chord string -> action id, built from the core-provided keymap.
   let keymapByChord: Record<string, string> = {};
@@ -106,6 +127,16 @@
     return map;
   }
 
+  // Svelte action: focus (and select) a text input as soon as it mounts.
+  function autofocus(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
+
+  function pct(op: ActiveOp): number {
+    return op.total > 0 ? Math.round((op.done / op.total) * 100) : 0;
+  }
+
   async function measure(side: PanelId) {
     const el = listingEls[side];
     if (!el) return;
@@ -118,13 +149,118 @@
     await measure("right");
   }
 
+  // Open the F5/F6 destination prompt, pre-filled with the *inactive* panel's
+  // directory — the natural other-panel target (§5.4a).
+  function openDestPrompt(op: OpKind) {
+    const other = snapshot.active === "left" ? "right" : "left";
+    const p = snapshot[snapshot.active];
+    const hasSources = p.selection.length > 0 || (p.entries[p.cursor_index]?.name ?? "..") !== "..";
+    if (!hasSources) return; // nothing to act on (e.g. cursor on `..`)
+    destPrompt = { op: op, value: snapshot[other].path };
+  }
+
+  async function confirmDest() {
+    if (!destPrompt) return;
+    const { op, value } = destPrompt;
+    destPrompt = null;
+    try {
+      const opId = await ops.startTransfer(op, value);
+      // If the op already completed while we were awaiting (fast single-item
+      // ops emit + finish before this resolves), do NOT open a phantom modal.
+      if (opId !== finishedOpId) {
+        activeOp = { id: opId, done: 0, total: 0, current: "" };
+      }
+    } catch (err) {
+      status = `error: ${String(err)}`;
+    }
+  }
+
+  function cancelDest() {
+    destPrompt = null;
+  }
+
+  async function answerCollision(resolution: Resolution) {
+    if (prompt?.kind !== "collision") return;
+    const opId = prompt.opId;
+    prompt = null;
+    try {
+      await ops.resolveCollision(opId, resolution);
+    } catch (err) {
+      status = `error: ${String(err)}`;
+    }
+  }
+
+  async function answerError(resolution: ErrorResolution) {
+    if (prompt?.kind !== "error") return;
+    const opId = prompt.opId;
+    prompt = null;
+    try {
+      await ops.resolveError(opId, resolution);
+    } catch (err) {
+      status = `error: ${String(err)}`;
+    }
+  }
+
+  async function cancelActiveOp() {
+    if (!activeOp) return;
+    try {
+      await ops.cancelOp(activeOp.id);
+    } catch (err) {
+      status = `error: ${String(err)}`;
+    }
+  }
+
+  // Keyboard handling while a (non-text) op modal is open. Returns true only when
+  // the key maps to a modal action, so the caller can preventDefault just those.
+  function handleModalKey(e: KeyboardEvent): boolean {
+    if (prompt?.kind === "collision") {
+      switch (e.key) {
+        case "s": case "S": void answerCollision("skip"); return true;
+        case "a": case "A": if (prompt.multiple) { void answerCollision("skip_all"); return true; } return false;
+        case "o": case "O": void answerCollision("overwrite"); return true;
+        case "l": case "L": if (prompt.multiple) { void answerCollision("overwrite_all"); return true; } return false;
+        case "Escape": void answerCollision("cancel"); return true;
+      }
+      return false;
+    }
+    if (prompt?.kind === "error") {
+      switch (e.key) {
+        case "r": case "R": void answerError("retry"); return true;
+        case "s": case "S": void answerError("skip"); return true;
+        case "a": case "A": void answerError("skip_all"); return true;
+        case "e": case "E": if (prompt.offerElevate) { void answerError("elevate"); return true; } return false;
+        case "Escape": void answerError("cancel"); return true;
+      }
+      return false;
+    }
+    if (activeOp) {
+      if (e.key === "Escape") { void cancelActiveOp(); return true; }
+      return false;
+    }
+    return false;
+  }
+
   async function onKeydown(e: KeyboardEvent) {
+    // A destination prompt owns the keyboard via its focused <input>; let it be.
+    if (destPrompt) return;
+    // Other op modals consume their own keys and otherwise block navigation —
+    // but must let OS/browser shortcuts (Cmd/Ctrl combos, e.g. Cmd+Q) through.
+    if (activeOp || prompt) {
+      if (e.metaKey || e.ctrlKey) return;
+      if (handleModalKey(e)) e.preventDefault();
+      return;
+    }
+
     const action = keymapByChord[chord(e)];
     if (!action) return;
     e.preventDefault();
     const active = snapshot.active;
     try {
-      if (action.startsWith("cursor.")) {
+      if (action === "op.copy") {
+        openDestPrompt("copy");
+      } else if (action === "op.move") {
+        openDestPrompt("move");
+      } else if (action.startsWith("cursor.")) {
         snapshot = await nav.moveCursor(active, action.slice("cursor.".length) as Motion);
       } else if (action.startsWith("select.")) {
         snapshot = await nav.selectAndMove(active, action.slice("select.".length) as Motion);
@@ -146,8 +282,19 @@
     }
   }
 
+  // Re-read both panels after an op so their listings reflect the changes.
+  async function refreshBoth() {
+    try {
+      snapshot = await nav.refresh("left");
+      snapshot = await nav.refresh("right");
+    } catch (err) {
+      status = `error: ${String(err)}`;
+    }
+  }
+
   onMount(() => {
     let ro: ResizeObserver | undefined;
+    const unlisten: UnlistenFn[] = [];
     (async () => {
       try {
         keymapByChord = buildKeymap(await nav.getKeymap());
@@ -157,6 +304,46 @@
         ro = new ResizeObserver(() => void measureAll());
         if (listingEls.left) ro.observe(listingEls.left);
         if (listingEls.right) ro.observe(listingEls.right);
+
+        // Operation lifecycle events (§5.4a). One op runs at a time in this UI.
+        unlisten.push(
+          await events.opProgressEvent.listen((e) => {
+            const p = e.payload;
+            // Ignore a progress tick that arrives after the op already completed
+            // (event delivery to the webview is not strictly ordered).
+            if (p.op_id === finishedOpId) return;
+            activeOp = {
+              id: p.op_id,
+              done: p.count_done,
+              total: p.count_total,
+              current: p.current,
+            };
+          }),
+        );
+        unlisten.push(
+          await events.opCollisionEvent.listen((e) => {
+            const p = e.payload;
+            prompt = { kind: "collision", opId: p.op_id, path: p.path, multiple: p.multiple };
+          }),
+        );
+        unlisten.push(
+          await events.opErrorEvent.listen((e) => {
+            const p = e.payload;
+            prompt = { kind: "error", opId: p.op_id, path: p.path, reason: p.reason, offerElevate: p.offer_elevate };
+          }),
+        );
+        unlisten.push(
+          await events.opCompleteEvent.listen((e) => {
+            const o = e.payload;
+            finishedOpId = o.op_id;
+            if (activeOp && activeOp.id !== o.op_id) return;
+            activeOp = null;
+            prompt = null;
+            status = o.summary;
+            void refreshBoth();
+          }),
+        );
+
         status = "ready";
       } catch (err) {
         status = `failed to start: ${String(err)}`;
@@ -167,6 +354,7 @@
     return () => {
       ro?.disconnect();
       window.removeEventListener("keydown", onKeydown);
+      for (const u of unlisten) u();
     };
   });
 
@@ -230,6 +418,79 @@
     <span class="focused">{focused}</span>
     <span class="state">{status}</span>
   </div>
+
+  <!-- File-operation dialogs (§5.4a). Rendered top-most; only one shows at a
+       time, in priority order: destination prompt → collision/error → progress. -->
+  {#if destPrompt}
+    <div class="overlay" role="presentation">
+      <div class="dialog">
+        <h2>{destPrompt.op === "copy" ? "Copy" : "Move"} to:</h2>
+        <input
+          class="dest-input"
+          type="text"
+          bind:value={destPrompt.value}
+          use:autofocus
+          onkeydown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); void confirmDest(); }
+            else if (e.key === "Escape") { e.preventDefault(); cancelDest(); }
+          }}
+        />
+        <div class="buttons">
+          <button onclick={() => void confirmDest()}>{destPrompt.op === "copy" ? "Copy" : "Move"}</button>
+          <button onclick={cancelDest}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {:else if prompt?.kind === "error"}
+    <div class="overlay" role="presentation">
+      <div class="dialog error">
+        <h2>Operation failed</h2>
+        <p class="path" title={prompt.path}>{prompt.path}</p>
+        <p class="reason">{prompt.reason}</p>
+        <div class="buttons">
+          <button onclick={() => void answerError("retry")}><u>R</u>etry</button>
+          <button onclick={() => void answerError("skip")}><u>S</u>kip</button>
+          <button onclick={() => void answerError("skip_all")}>Skip <u>A</u>ll</button>
+          {#if prompt.offerElevate}
+            <button onclick={() => void answerError("elevate")}><u>E</u>levate</button>
+          {/if}
+          <button onclick={() => void answerError("cancel")}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {:else if prompt?.kind === "collision"}
+    <div class="overlay" role="presentation">
+      <div class="dialog">
+        <h2>Destination already exists</h2>
+        <p class="path" title={prompt.path}>{prompt.path}</p>
+        <div class="buttons">
+          <button onclick={() => void answerCollision("skip")}><u>S</u>kip</button>
+          {#if prompt.multiple}
+            <button onclick={() => void answerCollision("skip_all")}>Skip <u>A</u>ll</button>
+          {/if}
+          <button onclick={() => void answerCollision("overwrite")}><u>O</u>verwrite</button>
+          {#if prompt.multiple}
+            <button onclick={() => void answerCollision("overwrite_all")}>Overwrite A<u>l</u>l</button>
+          {/if}
+          <button onclick={() => void answerCollision("cancel")}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {:else if activeOp}
+    <div class="overlay" role="presentation">
+      <div class="dialog">
+        <h2>Working…</h2>
+        <p class="path" title={activeOp.current}>{activeOp.current || "…"}</p>
+        <div class="progress-track">
+          <div class="progress-fill" style="width: {pct(activeOp)}%"></div>
+        </div>
+        <p class="count">{activeOp.done} / {activeOp.total} ({pct(activeOp)}%)</p>
+        <div class="buttons">
+          <button onclick={() => void cancelActiveOp()}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -352,5 +613,110 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* --- File-operation dialogs (§5.4a) --- */
+  .overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 10;
+  }
+  .dialog {
+    min-width: 360px;
+    max-width: 70vw;
+    padding: 16px;
+    background: var(--bg-alt);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  }
+  /* Failures use a red-background dialog (SPEC §5.6). */
+  .dialog.error {
+    background: #6e1f1f;
+    border-color: #d86b6b;
+    color: #ffe;
+  }
+  .dialog h2 {
+    margin: 0 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .dialog .path {
+    margin: 0 0 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--fg-dim);
+  }
+  .dialog.error .path,
+  .dialog.error .reason {
+    color: #ffd;
+  }
+  .dialog .reason {
+    margin: 0 0 12px;
+  }
+  .dest-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    margin-bottom: 12px;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+  }
+  .dest-input:focus {
+    outline: none;
+  }
+  .buttons {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .buttons button {
+    padding: 4px 12px;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .buttons button:hover {
+    border-color: var(--accent);
+  }
+  .dialog.error .buttons button {
+    color: #ffe;
+    background: rgba(0, 0, 0, 0.25);
+    border-color: #d86b6b;
+  }
+  .buttons u {
+    text-underline-offset: 2px;
+  }
+  .progress-track {
+    height: 8px;
+    margin-bottom: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.1s linear;
+  }
+  .count {
+    margin: 0 0 12px;
+    color: var(--fg-dim);
   }
 </style>

@@ -48,6 +48,26 @@ export const commands = {
 	 *  when it still exists (graceful refresh, SPEC §5.6).
 	 */
 	refresh: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("refresh", { panel })),
+	/**
+	 *  Begin a copy (F5) or move (F6) of the active panel's selection — or, when
+	 *  nothing is selected, the entry under the cursor (never `..`). `dest` is the
+	 *  editable destination from the F5/F6 prompt; it accepts `..`, relative, and
+	 *  absolute paths, resolved against the active panel's directory (§5.4a).
+	 * 
+	 *  Registers the op, spawns the transfer on a background thread (never blocking
+	 *  the UI), and returns the `op_id` the frontend uses to correlate the progress /
+	 *  collision / error / complete events and to cancel.
+	 */
+	startTransfer: (kind: OpKind, dest: string) => typedError<string, string>(__TAURI_INVOKE("start_transfer", { kind, dest })),
+	/**  Answer a collision prompt for a running op (§5.4a). */
+	resolveCollision: (opId: string, resolution: Resolution) => typedError<null, string>(__TAURI_INVOKE("resolve_collision", { opId, resolution })),
+	/**
+	 *  Answer an error prompt for a running op — Retry / Skip / Skip All / Cancel /
+	 *  Elevate (§5.6).
+	 */
+	resolveError: (opId: string, resolution: ErrorResolution) => typedError<null, string>(__TAURI_INVOKE("resolve_error", { opId, resolution })),
+	/**  Request cancellation of a running op; the engine stops between items (§5.4a). */
+	cancelOp: (opId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_op", { opId })),
 };
 
 /** Events */
@@ -136,6 +156,13 @@ export type EntryKind = "file" | "dir" | "symlink" | "special";
 export type EntryMarker = "ok" | "denied" | "broken";
 
 /**
+ *  Error-dialog resolution. Adds `Retry` and `Elevate`; elevation routes through
+ *  the OS-native auth prompt on the Tauri side — the app never handles passwords
+ *  (§5.6).
+ */
+export type ErrorResolution = "retry" | "skip" | "skip_all" | "cancel" | "elevate";
+
+/**
  *  One keybinding: an action id (e.g. `"cursor.down"`) and the key chords bound
  *  to it. Sourced from core config so the webview never hardcodes keys (§6/§7).
  *  Remapping, persistence, and conflict detection are a later slice.
@@ -180,6 +207,9 @@ export type OpErrorInfo = {
 	offer_elevate: boolean,
 };
 
+/**  Copy vs move — the two panel-to-panel transfer operations (§5.4). */
+export type OpKind = "copy" | "move";
+
 /**
  *  Structured result of an operation — the frontend renders this, never an
  *  opaque thrown error (§5.6).
@@ -205,7 +235,7 @@ export type OpProgress = {
 export type OpProgressEvent = OpProgress;
 
 /**  Terminal status of an operation (§5.4a / §5.6). */
-export type OpStatus = "pending" | "success" | "partial" | "failed";
+export type OpStatus = "pending" | "success" | "partial" | "failed" | "cancelled";
 
 /**
  *  Payload for a panel-state change pushed by the core, e.g. the directory
@@ -254,6 +284,12 @@ export type PanelState = {
 	show_hidden: boolean,
 	geometry: PanelGeometry,
 };
+
+/**
+ *  Name-collision resolution. FAR shapes: a single-file dialog omits the `*_all`
+ *  variants; a multi-file dialog offers all of them (§5.4a).
+ */
+export type Resolution = "skip" | "skip_all" | "overwrite" | "overwrite_all" | "cancel";
 
 /**  Sort order. Folders-first-by-name is the default (§5.8). */
 export type SortMode = "name_folders_first" | "type_name" | "size" | "date";

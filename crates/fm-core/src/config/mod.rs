@@ -56,5 +56,8 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         bind("select.down", &["Shift+ArrowDown"]),
         bind("select.left", &["Shift+ArrowLeft"]),
         bind("select.right", &["Shift+ArrowRight"]),
+        // File operations (§5.4).
+        bind("op.copy", &["F5"]),
+        bind("op.move", &["F6"]),
     ]
 }

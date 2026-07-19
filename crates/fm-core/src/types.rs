@@ -181,7 +181,7 @@ pub enum NavTarget {
 // ---------------------------------------------------------------------------
 
 /// Copy vs move — the two panel-to-panel transfer operations (§5.4).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum OpKind {
     Copy,
@@ -241,7 +241,7 @@ pub enum OpenAction {
 }
 
 /// Terminal status of an operation (§5.4a / §5.6).
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum OpStatus {
     #[default]
@@ -249,6 +249,7 @@ pub enum OpStatus {
     Success,
     Partial,
     Failed,
+    Cancelled,
 }
 
 /// Structured result of an operation — the frontend renders this, never an

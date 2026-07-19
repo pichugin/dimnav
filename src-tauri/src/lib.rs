@@ -6,6 +6,7 @@
 
 mod commands;
 mod events;
+mod ops_runtime;
 
 use tauri_specta::{collect_commands, collect_events, Builder};
 
@@ -29,6 +30,10 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::deselect_all,
             commands::navigate,
             commands::refresh,
+            commands::start_transfer,
+            commands::resolve_collision,
+            commands::resolve_error,
+            commands::cancel_op,
         ])
         .events(collect_events![
             events::OpProgressEvent,
@@ -72,6 +77,9 @@ pub fn run() {
         // Shared navigation state lives in fm-core; the adapter just wraps it in
         // a Mutex and hands it to Tauri as managed state.
         .manage(commands::SharedState::default())
+        // In-flight file operations (copy/move), so command handlers can answer
+        // prompts and cancel a running op.
+        .manage(ops_runtime::OpRegistry::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
