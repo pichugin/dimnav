@@ -141,6 +141,14 @@ impl OpObserver for TauriObserver {
         elevate(kind, src, dest)
     }
 
+    fn trash_item(&self, path: &str) -> Result<(), String> {
+        trash::delete(path).map_err(|e| format!("could not move to Trash: {e}"))
+    }
+
+    fn elevate_delete(&self, path: &str) -> Result<(), String> {
+        elevate_delete(path)
+    }
+
     fn is_cancelled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
     }
@@ -187,6 +195,38 @@ fn elevate(kind: OpKind, src: &str, dest: &str) -> Result<(), String> {
 
 #[cfg(not(target_os = "macos"))]
 fn elevate(_kind: OpKind, _src: &str, _dest: &str) -> Result<(), String> {
+    Err("privilege elevation is not supported on this platform".to_string())
+}
+
+/// Re-delete a single path with administrator privileges (the delete counterpart
+/// of [`elevate`]). On macOS this runs `rm -rf <path>` through `osascript`'s
+/// `with administrator privileges`, showing the OS-native auth dialog — the app
+/// never handles the password (SPEC §5.6).
+#[cfg(target_os = "macos")]
+fn elevate_delete(path: &str) -> Result<(), String> {
+    use std::process::Command;
+
+    let shell_cmd = format!("/bin/rm -rf {}", sh_quote(path));
+    let script = format!(
+        "do shell script \"{}\" with administrator privileges",
+        applescript_escape(&shell_cmd)
+    );
+
+    let status = Command::new("/usr/bin/osascript")
+        .arg("-e")
+        .arg(script)
+        .status()
+        .map_err(|e| format!("failed to launch osascript: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err("elevation was cancelled or failed".to_string())
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn elevate_delete(_path: &str) -> Result<(), String> {
     Err("privilege elevation is not supported on this platform".to_string())
 }
 

@@ -143,6 +143,9 @@ pub struct AppSnapshot {
     pub left: PanelState,
     pub right: PanelState,
     pub active: PanelId,
+    /// Global "Move to Trash" default for the delete dialog, OFF by default
+    /// (§5.4a). The frontend renders the checkbox from this.
+    pub trash_default: bool,
 }
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,9 @@ pub struct AppState {
     pub left: PanelState,
     pub right: PanelState,
     pub active: PanelId,
+    /// Global "Move to Trash" default for the delete dialog — OFF by default
+    /// (§5.4a). In-memory this slice; TOML persistence lands with the config slice.
+    pub trash_default: bool,
 }
 
 impl AppState {
@@ -42,6 +45,7 @@ impl AppState {
             left: self.left.clone(),
             right: self.right.clone(),
             active: self.active,
+            trash_default: self.trash_default,
         }
     }
 }

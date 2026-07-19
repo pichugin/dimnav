@@ -49,6 +49,25 @@ export const commands = {
 	 */
 	refresh: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("refresh", { panel })),
 	/**
+	 *  Create a directory named `name` inside `panel`'s current directory (F7), then
+	 *  re-read the listing and position the cursor on the new folder. `name` may be a
+	 *  nested relative path (`a/b`), in which case the cursor lands on the first
+	 *  component.
+	 */
+	createDir: (panel: PanelId, name: string) => typedError<AppSnapshot, string>(__TAURI_INVOKE("create_dir", { panel, name })),
+	/**
+	 *  Rename the entry under `panel`'s cursor to `new_name`, in place (Shift+F6).
+	 *  Errors if the cursor is on `..`, `new_name` is empty / contains a separator, or
+	 *  a file of that name already exists (never silently overwrites, §5.4a). On
+	 *  success, re-reads the listing and keeps the cursor on the renamed entry.
+	 */
+	rename: (panel: PanelId, newName: string) => typedError<AppSnapshot, string>(__TAURI_INVOKE("rename", { panel, newName })),
+	/**
+	 *  Set the global "Move to Trash" default (the delete-dialog checkbox), OFF by
+	 *  default (§5.4a). In-memory this slice — persistence lands with the config slice.
+	 */
+	setTrashDefault: (value: boolean) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_trash_default", { value })),
+	/**
 	 *  Begin a copy (F5) or move (F6) of the active panel's selection — or, when
 	 *  nothing is selected, the entry under the cursor (never `..`). `dest` is the
 	 *  editable destination from the F5/F6 prompt; it accepts `..`, relative, and
@@ -59,6 +78,16 @@ export const commands = {
 	 *  collision / error / complete events and to cancel.
 	 */
 	startTransfer: (kind: OpKind, dest: string) => typedError<string, string>(__TAURI_INVOKE("start_transfer", { kind, dest })),
+	/**
+	 *  Begin a delete (F8) of the active panel's selection — or, when nothing is
+	 *  selected, the entry under the cursor (never `..`). Reads the persisted
+	 *  "Move to Trash" flag from state; when set, items go to the OS trash, otherwise
+	 *  they are permanently removed (§5.4a). Mirrors [`start_transfer`]: registers the
+	 *  op, spawns the delete on a background thread (never blocking the UI), and
+	 *  returns the `op_id` the frontend uses to correlate progress / error / complete
+	 *  events and to cancel.
+	 */
+	startDelete: () => typedError<string, string>(__TAURI_INVOKE("start_delete")),
 	/**  Answer a collision prompt for a running op (§5.4a). */
 	resolveCollision: (opId: string, resolution: Resolution) => typedError<null, string>(__TAURI_INVOKE("resolve_collision", { opId, resolution })),
 	/**
@@ -90,6 +119,11 @@ export type AppSnapshot = {
 	left: PanelState,
 	right: PanelState,
 	active: PanelId,
+	/**
+	 *  Global "Move to Trash" default for the delete dialog, OFF by default
+	 *  (§5.4a). The frontend renders the checkbox from this.
+	 */
+	trash_default: boolean,
 };
 
 /**

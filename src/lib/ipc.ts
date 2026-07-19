@@ -73,6 +73,10 @@ export const nav = {
     unwrap(commands.selectAndMove(panel, motion)),
   selectAll: (panel: PanelId) => unwrap(commands.selectAll(panel)),
   deselectAll: (panel: PanelId) => unwrap(commands.deselectAll(panel)),
+  // Create directory (F7) / Rename (Shift+F6) (§5.4)
+  createDir: (panel: PanelId, name: string) => unwrap(commands.createDir(panel, name)),
+  rename: (panel: PanelId, newName: string) => unwrap(commands.rename(panel, newName)),
+  setTrashDefault: (value: boolean) => unwrap(commands.setTrashDefault(value)),
 };
 
 /**
@@ -84,6 +88,7 @@ export const nav = {
 export const ops = {
   startTransfer: (kind: OpKind, dest: string) =>
     unwrap(commands.startTransfer(kind, dest)),
+  startDelete: () => unwrap(commands.startDelete()),
   resolveCollision: (opId: string, resolution: Resolution) =>
     unwrap(commands.resolveCollision(opId, resolution)),
   resolveError: (opId: string, resolution: ErrorResolution) =>

@@ -14,8 +14,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use fm_core::state::AppState;
 use fm_core::types::{
-    AppSnapshot, Config, DirListing, EntryKind, ErrorResolution, KeyBinding, Motion, NavTarget,
-    OpKind, OpRequest, PanelId, Resolution,
+    AppSnapshot, Config, DeleteRequest, DirListing, EntryKind, ErrorResolution, KeyBinding, Motion,
+    NavTarget, OpKind, OpRequest, PanelId, Resolution,
 };
 use tauri::{AppHandle, State};
 use tauri_specta::Event;
@@ -277,6 +277,85 @@ pub async fn refresh(state: State<'_, SharedState>, panel: PanelId) -> Result<Ap
     Ok(s.snapshot())
 }
 
+// --- Create directory (F7) / Rename (Shift+F6) (§5.4) -----------------------
+
+/// Create a directory named `name` inside `panel`'s current directory (F7), then
+/// re-read the listing and position the cursor on the new folder. `name` may be a
+/// nested relative path (`a/b`), in which case the cursor lands on the first
+/// component.
+#[tauri::command]
+#[specta::specta]
+pub async fn create_dir(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+    name: String,
+) -> Result<AppSnapshot, String> {
+    let (path, show_hidden) = {
+        let s = state.lock().map_err(lock_err)?;
+        let p = s.panel(panel);
+        (p.path.clone(), p.show_hidden)
+    };
+
+    fm_core::fs::make_dir(Path::new(&path), &name)?;
+
+    // The new entry to focus is the first path component of `name`.
+    let focus = Path::new(&name)
+        .components()
+        .next()
+        .and_then(|c| c.as_os_str().to_str())
+        .map(str::to_string);
+
+    let listing =
+        tauri::async_runtime::spawn_blocking(move || fm_core::fs::list_dir(&path, show_hidden))
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let mut s = state.lock().map_err(lock_err)?;
+    let p = s.panel_mut(panel);
+    fm_core::nav::set_listing(p, listing);
+    if let Some(name) = focus {
+        fm_core::nav::position_on(p, &name);
+    }
+    Ok(s.snapshot())
+}
+
+/// Rename the entry under `panel`'s cursor to `new_name`, in place (Shift+F6).
+/// Errors if the cursor is on `..`, `new_name` is empty / contains a separator, or
+/// a file of that name already exists (never silently overwrites, §5.4a). On
+/// success, re-reads the listing and keeps the cursor on the renamed entry.
+#[tauri::command]
+#[specta::specta]
+pub async fn rename(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+    new_name: String,
+) -> Result<AppSnapshot, String> {
+    let (path, show_hidden, old) = {
+        let s = state.lock().map_err(lock_err)?;
+        let p = s.panel(panel);
+        let old = p
+            .entries
+            .get(p.cursor_index)
+            .map(|e| e.name.clone())
+            .ok_or_else(|| "nothing to rename".to_string())?;
+        (p.path.clone(), p.show_hidden, old)
+    };
+
+    fm_core::fs::rename_entry(Path::new(&path), &old, &new_name)?;
+    let focus = new_name.trim().to_string();
+
+    let listing =
+        tauri::async_runtime::spawn_blocking(move || fm_core::fs::list_dir(&path, show_hidden))
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let mut s = state.lock().map_err(lock_err)?;
+    let p = s.panel_mut(panel);
+    fm_core::nav::set_listing(p, listing);
+    fm_core::nav::position_on(p, &focus);
+    Ok(s.snapshot())
+}
+
 // --- File operations: copy / move (§5.4a) -----------------------------------
 
 /// Begin a copy (F5) or move (F6) of the active panel's selection — or, when
@@ -331,6 +410,16 @@ pub fn start_transfer(
         return Err("nothing to transfer".to_string());
     }
 
+    // A copy/move destination is always a folder to place sources into. Renaming in
+    // place is a separate, explicit action (Shift+F6), so a single-source transfer
+    // to a path that does not exist must NOT silently rename — surface an error
+    // instead (per product decision; the engine still supports rename for internal
+    // reuse). Multiple sources to a missing path stay allowed: that means "create a
+    // new folder for them".
+    if req.sources.len() == 1 && !Path::new(&req.dest).exists() {
+        return Err(format!("destination folder does not exist: {}", req.dest));
+    }
+
     let (tx, rx) = std::sync::mpsc::channel::<UserInput>();
     let cancel = Arc::new(AtomicBool::new(false));
     let op_id = registry_state.register(tx, cancel.clone());
@@ -348,6 +437,86 @@ pub fn start_transfer(
         outcome.op_id = thread_id.clone();
         let _ = OpCompleteEvent(outcome).emit(&app);
         // Retire the op so late resolve_* calls fail cleanly.
+        registry(&app).remove(&thread_id);
+    });
+
+    Ok(op_id)
+}
+
+/// Set the global "Move to Trash" default (the delete-dialog checkbox), OFF by
+/// default (§5.4a). In-memory this slice — persistence lands with the config slice.
+#[tauri::command]
+#[specta::specta]
+pub fn set_trash_default(
+    state: State<'_, SharedState>,
+    value: bool,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    s.trash_default = value;
+    Ok(s.snapshot())
+}
+
+/// Begin a delete (F8) of the active panel's selection — or, when nothing is
+/// selected, the entry under the cursor (never `..`). Reads the persisted
+/// "Move to Trash" flag from state; when set, items go to the OS trash, otherwise
+/// they are permanently removed (§5.4a). Mirrors [`start_transfer`]: registers the
+/// op, spawns the delete on a background thread (never blocking the UI), and
+/// returns the `op_id` the frontend uses to correlate progress / error / complete
+/// events and to cancel.
+#[tauri::command]
+#[specta::specta]
+pub fn start_delete(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    registry_state: State<'_, OpRegistry>,
+) -> Result<String, String> {
+    let req = {
+        let s = state.lock().map_err(lock_err)?;
+        let p = s.panel(s.active);
+        let base = PathBuf::from(&p.path);
+
+        // Selection drives the op; empty selection falls back to the cursor entry.
+        let indices: Vec<usize> = if p.selection.is_empty() {
+            vec![p.cursor_index]
+        } else {
+            let mut v = p.selection.clone();
+            v.sort_unstable();
+            v
+        };
+
+        let paths: Vec<String> = indices
+            .into_iter()
+            .filter_map(|i| p.entries.get(i))
+            .filter(|e| e.name != "..")
+            .map(|e| base.join(&e.name).to_string_lossy().into_owned())
+            .collect();
+
+        DeleteRequest {
+            paths,
+            to_trash: s.trash_default,
+        }
+    };
+
+    if req.paths.is_empty() {
+        return Err("nothing to delete".to_string());
+    }
+
+    let (tx, rx) = std::sync::mpsc::channel::<UserInput>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let op_id = registry_state.register(tx, cancel.clone());
+
+    let app = app.clone();
+    let thread_id = op_id.clone();
+    std::thread::spawn(move || {
+        let observer = TauriObserver {
+            app: app.clone(),
+            op_id: thread_id.clone(),
+            rx,
+            cancel,
+        };
+        let mut outcome = fm_core::ops::run_delete(&req, &observer);
+        outcome.op_id = thread_id.clone();
+        let _ = OpCompleteEvent(outcome).emit(&app);
         registry(&app).remove(&thread_id);
     });
 

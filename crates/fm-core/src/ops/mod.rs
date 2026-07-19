@@ -32,7 +32,9 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use crate::types::{ErrorResolution, OpKind, OpOutcome, OpRequest, OpStatus, Resolution};
+use crate::types::{
+    DeleteRequest, ErrorResolution, OpKind, OpOutcome, OpRequest, OpStatus, Resolution,
+};
 
 /// The seam between the pure engine and the platform/UI. `src-tauri` implements
 /// this over channels + Tauri events; unit tests implement it with a mock.
@@ -58,6 +60,21 @@ pub trait OpObserver {
 
     /// Cooperative cancellation, polled between items.
     fn is_cancelled(&self) -> bool;
+
+    /// Move a single top-level path to the OS trash (the platform trashes the whole
+    /// subtree). Used by [`run_delete`] when the "Move to Trash" checkbox is on
+    /// (§5.4a). Delegated to the platform so the core stays OS-agnostic; the default
+    /// reports it as unsupported so transfer-only observers need not implement it.
+    fn trash_item(&self, _path: &str) -> Result<(), String> {
+        Err("trash is not supported".to_string())
+    }
+
+    /// Re-delete a single path with elevated privileges via the OS-native auth
+    /// prompt (the delete counterpart of [`elevate_item`]). `Ok(())` means the path
+    /// is now gone. Default: unsupported.
+    fn elevate_delete(&self, _path: &str) -> Result<(), String> {
+        Err("elevation is not supported".to_string())
+    }
 }
 
 /// Control-flow signal threaded through the recursive walk.
@@ -527,6 +544,255 @@ impl Engine<'_> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Delete (SPEC §5.4a / §5.4b / §5.6)
+// ---------------------------------------------------------------------------
+
+/// Run a delete described by `req`, reporting to `obs`. Synchronous and blocking
+/// by design — the caller runs it off the UI thread, exactly like [`run_transfer`],
+/// and reuses the same [`OpObserver`] (progress / error / cancel). Deletion has no
+/// name collisions, so `on_collision` is never called.
+///
+/// With `req.to_trash` set, each top-level path is handed to the platform's trash
+/// via [`OpObserver::trash_item`] (the OS trashes the whole subtree); otherwise the
+/// tree is removed post-order so per-item errors and progress are granular, and a
+/// permission failure can be retried through the OS-native elevation prompt
+/// ([`OpObserver::elevate_delete`]). The returned [`OpOutcome`] carries an empty
+/// `op_id`; the caller stamps the real id before emitting completion.
+pub fn run_delete(req: &DeleteRequest, obs: &dyn OpObserver) -> OpOutcome {
+    let total: u64 = req.paths.iter().map(|s| count_items(Path::new(s))).sum();
+
+    let mut engine = DeleteEngine {
+        obs,
+        total,
+        done: 0,
+        to_trash: req.to_trash,
+        deleted: 0,
+        failed: 0,
+        err_skip_all: false,
+        cancelled: false,
+    };
+
+    for path in &req.paths {
+        if engine.obs.is_cancelled() {
+            engine.cancelled = true;
+            break;
+        }
+        let path = PathBuf::from(path);
+        let flow = if engine.to_trash {
+            engine.trash_source(&path)
+        } else {
+            engine.delete_recursive(&path)
+        };
+        if let Flow::Cancel = flow {
+            break;
+        }
+    }
+
+    engine.finish()
+}
+
+/// Mutable state carried through one `run_delete`.
+struct DeleteEngine<'a> {
+    obs: &'a dyn OpObserver,
+    total: u64,
+    done: u64,
+    to_trash: bool,
+    deleted: u64,
+    failed: u64,
+    /// Sticky "Skip All" from the error dialog.
+    err_skip_all: bool,
+    cancelled: bool,
+}
+
+impl DeleteEngine<'_> {
+    /// Trash one top-level path as a single unit; the OS handles the subtree. The
+    /// whole subtree's item count advances progress on success.
+    fn trash_source(&mut self, path: &Path) -> Flow {
+        let units = count_items(path);
+        loop {
+            match self.obs.trash_item(&path.to_string_lossy()) {
+                Ok(()) => {
+                    self.deleted += units;
+                    self.done += units;
+                    self.obs
+                        .progress(self.done, self.total, &path.to_string_lossy());
+                    return Flow::Continue;
+                }
+                // Trashing never offers elevation (elevating would hard-delete and
+                // defeat the point).
+                Err(reason) => match self.drive_error(path, &reason, false) {
+                    ErrFlow::Retry => continue,
+                    ErrFlow::Handled => {
+                        // Account the whole subtree as failed so progress completes.
+                        self.done = self.done.saturating_add(units.saturating_sub(1));
+                        return Flow::Continue;
+                    }
+                    ErrFlow::Cancel => return Flow::Cancel,
+                },
+            }
+        }
+    }
+
+    /// Remove one entry, recursing post-order (children before the directory node).
+    /// A symlink or special file is a single leaf removed by `remove_file` (the link
+    /// itself, never its target — §5.4a).
+    fn delete_recursive(&mut self, path: &Path) -> Flow {
+        if self.obs.is_cancelled() {
+            self.cancelled = true;
+            return Flow::Cancel;
+        }
+
+        let meta = match fs::symlink_metadata(path) {
+            Ok(m) => m,
+            Err(e) => return self.on_item_error(path, &e),
+        };
+        // Only a real directory recurses; a symlink (even to a dir) is a leaf.
+        let is_dir = meta.file_type().is_dir();
+
+        if is_dir {
+            let read = match fs::read_dir(path) {
+                Ok(r) => r,
+                Err(e) => return self.on_item_error(path, &e),
+            };
+            for child in read.flatten() {
+                if let Flow::Cancel = self.delete_recursive(&child.path()) {
+                    return Flow::Cancel;
+                }
+            }
+            // The (now-empty) directory node itself is one unit.
+            let p = path.to_path_buf();
+            self.perform(path, move || fs::remove_dir(&p))
+        } else {
+            let p = path.to_path_buf();
+            self.perform(path, move || fs::remove_file(&p))
+        }
+    }
+
+    /// Run one fallible removal, driving the error dialog on failure. On success
+    /// bumps the progress counters (one unit).
+    fn perform(&mut self, path: &Path, mut action: impl FnMut() -> io::Result<()>) -> Flow {
+        loop {
+            match action() {
+                Ok(()) => {
+                    self.deleted += 1;
+                    self.done += 1;
+                    self.obs
+                        .progress(self.done, self.total, &path.to_string_lossy());
+                    return Flow::Continue;
+                }
+                Err(e) => {
+                    let offer_elevate = e.kind() == io::ErrorKind::PermissionDenied;
+                    match self.drive_error(path, &e.to_string(), offer_elevate) {
+                        ErrFlow::Retry => continue,
+                        ErrFlow::Handled => return Flow::Continue,
+                        ErrFlow::Cancel => return Flow::Cancel,
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drive the error dialog for a failed removal — Retry re-runs, Skip/SkipAll
+    /// record a failure and move on, Cancel aborts, Elevate re-runs the path through
+    /// the OS-native prompt. `offer_elevate` gates the Elevate choice.
+    fn drive_error(&mut self, path: &Path, reason: &str, offer_elevate: bool) -> ErrFlow {
+        if self.err_skip_all {
+            self.record_failure(path);
+            return ErrFlow::Handled;
+        }
+        match self
+            .obs
+            .on_error(&path.to_string_lossy(), reason, offer_elevate)
+        {
+            ErrorResolution::Retry => ErrFlow::Retry,
+            ErrorResolution::Skip => {
+                self.record_failure(path);
+                ErrFlow::Handled
+            }
+            ErrorResolution::SkipAll => {
+                self.err_skip_all = true;
+                self.record_failure(path);
+                ErrFlow::Handled
+            }
+            ErrorResolution::Cancel => {
+                self.cancelled = true;
+                ErrFlow::Cancel
+            }
+            ErrorResolution::Elevate => {
+                match self.obs.elevate_delete(&path.to_string_lossy()) {
+                    Ok(()) => {
+                        self.deleted += 1;
+                        self.done += 1;
+                        self.obs
+                            .progress(self.done, self.total, &path.to_string_lossy());
+                    }
+                    Err(_) => self.record_failure(path),
+                }
+                ErrFlow::Handled
+            }
+        }
+    }
+
+    /// Record one failed unit and advance progress past it.
+    fn record_failure(&mut self, path: &Path) {
+        self.failed += 1;
+        self.done += 1;
+        self.obs
+            .progress(self.done, self.total, &path.to_string_lossy());
+    }
+
+    /// Error while stat-ing / reading a source item. Retry on such an unactionable
+    /// failure is treated as a skip so progress still completes.
+    fn on_item_error(&mut self, path: &Path, err: &io::Error) -> Flow {
+        let offer_elevate = !self.to_trash && err.kind() == io::ErrorKind::PermissionDenied;
+        match self.drive_error(path, &err.to_string(), offer_elevate) {
+            ErrFlow::Cancel => Flow::Cancel,
+            ErrFlow::Retry => {
+                self.record_failure(path);
+                Flow::Continue
+            }
+            ErrFlow::Handled => Flow::Continue,
+        }
+    }
+
+    /// Build the terminal outcome from the counters.
+    fn finish(self) -> OpOutcome {
+        let verb = if self.to_trash { "Trashed" } else { "Deleted" };
+        let (status, summary) = if self.cancelled {
+            (
+                OpStatus::Cancelled,
+                format!(
+                    "Cancelled — {} {} of {} item(s)",
+                    verb.to_lowercase(),
+                    self.deleted,
+                    self.total
+                ),
+            )
+        } else if self.failed > 0 && self.deleted == 0 {
+            (
+                OpStatus::Failed,
+                format!("Failed — {} error(s)", self.failed),
+            )
+        } else if self.failed > 0 {
+            (
+                OpStatus::Partial,
+                format!("{} {}, {} failed", verb, self.deleted, self.failed),
+            )
+        } else {
+            (
+                OpStatus::Success,
+                format!("{} {} item(s)", verb, self.deleted),
+            )
+        };
+        OpOutcome {
+            op_id: String::new(),
+            status,
+            summary,
+        }
+    }
+}
+
 /// Recreate a file or symlink at `target`. Symlinks are copied verbatim (the link
 /// itself, not the pointed-at contents); regular files use `fs::copy`.
 fn copy_leaf(src: &Path, target: &Path, is_symlink: bool) -> io::Result<()> {
@@ -635,6 +901,7 @@ mod tests {
         collisions: RefCell<Vec<Resolution>>,
         errors: RefCell<Vec<ErrorResolution>>,
         progress_calls: AtomicUsize,
+        trash_calls: AtomicUsize,
         cancel_after: Option<usize>,
     }
 
@@ -644,6 +911,7 @@ mod tests {
                 collisions: RefCell::new(Vec::new()),
                 errors: RefCell::new(Vec::new()),
                 progress_calls: AtomicUsize::new(0),
+                trash_calls: AtomicUsize::new(0),
                 cancel_after: None,
             }
         }
@@ -678,6 +946,13 @@ mod tests {
                 .unwrap_or(ErrorResolution::Cancel)
         }
         fn elevate_item(&self, _k: OpKind, _s: &str, _d: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn trash_item(&self, _path: &str) -> Result<(), String> {
+            self.trash_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        fn elevate_delete(&self, _path: &str) -> Result<(), String> {
             Ok(())
         }
         fn is_cancelled(&self) -> bool {
@@ -921,5 +1196,108 @@ mod tests {
             resolve_dest(base, "./x/./y"),
             PathBuf::from("/home/user/dir/x/y")
         );
+    }
+
+    // --- Delete (run_delete) ------------------------------------------------
+
+    #[test]
+    fn deletes_a_nested_tree() {
+        let root = tmp();
+        let target = root.join("target");
+        write(&target.join("a.txt"), "a");
+        write(&target.join("sub/b.txt"), "b");
+
+        let obs = MockObs::new();
+        let req = DeleteRequest {
+            paths: vec![target.to_string_lossy().into_owned()],
+            to_trash: false,
+        };
+        let out = run_delete(&req, &obs);
+
+        assert_eq!(out.status, OpStatus::Success);
+        assert!(!target.exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_skip_on_error_leaves_siblings() {
+        let root = tmp();
+        let good = root.join("good.txt");
+        write(&good, "x");
+        let missing = root.join("missing.txt"); // never created → stat error
+
+        // One Skip answer covers the failing (missing) path.
+        let obs = MockObs::new().errors(vec![ErrorResolution::Skip]);
+        let req = DeleteRequest {
+            paths: vec![
+                good.to_string_lossy().into_owned(),
+                missing.to_string_lossy().into_owned(),
+            ],
+            to_trash: false,
+        };
+        let out = run_delete(&req, &obs);
+
+        // The good file is gone; the run reports a partial (1 deleted, 1 failed).
+        assert!(!good.exists());
+        assert_eq!(out.status, OpStatus::Partial);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn cancel_mid_delete_yields_cancelled() {
+        let root = tmp();
+        let target = root.join("target");
+        for i in 0..10 {
+            write(&target.join(format!("f{i}.txt")), "x");
+        }
+
+        let obs = MockObs::new().cancel_after(3);
+        let req = DeleteRequest {
+            paths: vec![target.to_string_lossy().into_owned()],
+            to_trash: false,
+        };
+        let out = run_delete(&req, &obs);
+
+        assert_eq!(out.status, OpStatus::Cancelled);
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn trash_routes_to_observer_and_counts_subtree() {
+        let root = tmp();
+        let target = root.join("target");
+        write(&target.join("a.txt"), "a");
+        write(&target.join("b.txt"), "b");
+
+        let obs = MockObs::new();
+        let req = DeleteRequest {
+            paths: vec![target.to_string_lossy().into_owned()],
+            to_trash: true,
+        };
+        let out = run_delete(&req, &obs);
+
+        // One trash call for the top-level path; the mock does not touch the disk.
+        assert_eq!(out.status, OpStatus::Success);
+        assert_eq!(obs.trash_calls.load(Ordering::SeqCst), 1);
+        assert!(target.exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_elevate_routes_to_elevate_delete() {
+        let root = tmp();
+        let missing = root.join("missing.txt"); // stat error drives the dialog
+
+        // Answer the error with Elevate; the mock's elevate_delete succeeds.
+        let obs = MockObs::new().errors(vec![ErrorResolution::Elevate]);
+        let req = DeleteRequest {
+            paths: vec![missing.to_string_lossy().into_owned()],
+            to_trash: false,
+        };
+        let out = run_delete(&req, &obs);
+
+        // Elevation "handled" the item, so the op succeeds.
+        assert_eq!(out.status, OpStatus::Success);
+        fs::remove_dir_all(&root).ok();
     }
 }

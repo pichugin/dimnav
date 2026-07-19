@@ -37,8 +37,12 @@
     left: emptyPanel(),
     right: emptyPanel(),
     active: "left",
+    trash_default: false,
   });
   let status = $state("starting…");
+  // True while Shift is held, so the F-key bar can show its shifted labels
+  // (F6 → Rename). Reset on blur so a released-outside Shift never sticks.
+  let shiftHeld = $state(false);
 
   // --- File-operation dialogs (§5.4a) ---------------------------------------
   // The editable F5/F6 destination prompt, shown before an op starts.
@@ -56,6 +60,14 @@
     | { kind: "collision"; opId: string; path: string; multiple: boolean }
     | { kind: "error"; opId: string; path: string; reason: string; offerElevate: boolean };
   let prompt = $state<Prompt | null>(null);
+  // The delete confirmation dialog (F8), carrying the "Move to Trash" checkbox.
+  type DeleteConfirm = { label: string };
+  let deleteConfirm = $state<DeleteConfirm | null>(null);
+  // A single-field text prompt reused for Create Directory (F7) and Rename
+  // (Shift+F6). `error` holds an inline message (e.g. name collision) so the
+  // prompt can stay open for the user to retype.
+  type TextPrompt = { kind: "mkdir" | "rename"; value: string; error?: string };
+  let textPrompt = $state<TextPrompt | null>(null);
 
   // chord string -> action id, built from the core-provided keymap.
   let keymapByChord: Record<string, string> = {};
@@ -179,6 +191,86 @@
     destPrompt = null;
   }
 
+  function errMessage(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  // --- Delete (F8) ----------------------------------------------------------
+  // Open the delete confirmation, describing what the op will act on (the active
+  // panel's selection, else the entry under the cursor; never `..`).
+  function openDelete() {
+    const p = snapshot[snapshot.active];
+    const selCount = p.selection.length;
+    const cursorName = p.entries[p.cursor_index]?.name ?? "..";
+    if (selCount === 0 && cursorName === "..") return; // nothing to delete
+    const label =
+      selCount > 0 ? `${selCount} selected item${selCount > 1 ? "s" : ""}` : cursorName;
+    deleteConfirm = { label };
+  }
+
+  async function confirmDelete() {
+    deleteConfirm = null;
+    try {
+      const opId = await ops.startDelete();
+      // Same fast-op guard as confirmDest: a quick delete can finish before this
+      // resolves, so don't resurrect a phantom progress modal.
+      if (opId !== finishedOpId) {
+        activeOp = { id: opId, done: 0, total: 0, current: "" };
+      }
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  // Toggle the persisted "Move to Trash" default (core is the source of truth).
+  async function toggleTrash() {
+    try {
+      snapshot = await nav.setTrashDefault(!snapshot.trash_default);
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  // --- Create directory (F7) / Rename (Shift+F6) ----------------------------
+  function openMkdir() {
+    textPrompt = { kind: "mkdir", value: "" };
+  }
+
+  function openRename() {
+    const p = snapshot[snapshot.active];
+    const name = p.entries[p.cursor_index]?.name ?? "..";
+    if (name === "..") return; // `..` cannot be renamed
+    textPrompt = { kind: "rename", value: name };
+  }
+
+  async function confirmText() {
+    if (!textPrompt) return;
+    const { kind, value } = textPrompt;
+    try {
+      snapshot =
+        kind === "mkdir"
+          ? await nav.createDir(snapshot.active, value)
+          : await nav.rename(snapshot.active, value);
+      textPrompt = null;
+    } catch (err) {
+      // Keep the prompt open with an inline error so the user can retype.
+      textPrompt = { kind, value, error: errMessage(err) };
+    }
+  }
+
+  function cancelText() {
+    textPrompt = null;
+  }
+
+  // Focus a rename input and preselect the base name (extension excluded), so a
+  // quick retype changes the name but keeps the extension.
+  function renameFocus(node: HTMLInputElement) {
+    node.focus();
+    const dot = node.value.lastIndexOf(".");
+    if (dot > 0) node.setSelectionRange(0, dot);
+    else node.select();
+  }
+
   async function answerCollision(resolution: Resolution) {
     if (prompt?.kind !== "collision") return;
     const opId = prompt.opId;
@@ -233,6 +325,14 @@
       }
       return false;
     }
+    if (deleteConfirm) {
+      switch (e.key) {
+        case "Enter": case "d": case "D": void confirmDelete(); return true;
+        case "t": case "T": void toggleTrash(); return true;
+        case "Escape": deleteConfirm = null; return true;
+      }
+      return false;
+    }
     if (activeOp) {
       if (e.key === "Escape") { void cancelActiveOp(); return true; }
       return false;
@@ -241,11 +341,13 @@
   }
 
   async function onKeydown(e: KeyboardEvent) {
-    // A destination prompt owns the keyboard via its focused <input>; let it be.
-    if (destPrompt) return;
+    shiftHeld = e.shiftKey;
+    // Text prompts (destination, mkdir, rename) own the keyboard via their focused
+    // <input>; let them be.
+    if (destPrompt || textPrompt) return;
     // Other op modals consume their own keys and otherwise block navigation —
     // but must let OS/browser shortcuts (Cmd/Ctrl combos, e.g. Cmd+Q) through.
-    if (activeOp || prompt) {
+    if (activeOp || prompt || deleteConfirm) {
       if (e.metaKey || e.ctrlKey) return;
       if (handleModalKey(e)) e.preventDefault();
       return;
@@ -260,6 +362,12 @@
         openDestPrompt("copy");
       } else if (action === "op.move") {
         openDestPrompt("move");
+      } else if (action === "op.delete") {
+        openDelete();
+      } else if (action === "op.mkdir") {
+        openMkdir();
+      } else if (action === "op.rename") {
+        openRename();
       } else if (action.startsWith("cursor.")) {
         snapshot = await nav.moveCursor(active, action.slice("cursor.".length) as Motion);
       } else if (action.startsWith("select.")) {
@@ -350,10 +458,16 @@
       }
     })();
 
+    const onKeyup = (e: KeyboardEvent) => (shiftHeld = e.shiftKey);
+    const onBlur = () => (shiftHeld = false);
     window.addEventListener("keydown", onKeydown);
+    window.addEventListener("keyup", onKeyup);
+    window.addEventListener("blur", onBlur);
     return () => {
       ro?.disconnect();
       window.removeEventListener("keydown", onKeydown);
+      window.removeEventListener("keyup", onKeyup);
+      window.removeEventListener("blur", onBlur);
       for (const u of unlisten) u();
     };
   });
@@ -363,6 +477,22 @@
     const p = snapshot[snapshot.active];
     return p.entries[p.cursor_index]?.name ?? "";
   });
+
+  // Function-key hints. While Shift is held, F6 advertises its shifted action
+  // (Rename) instead of Move, so the bar reflects what the next keystroke does.
+  const fkeys = $derived<[string, string][]>([
+    ["F3", "View"],
+    ["F4", "Edit"],
+    ["F5", "Copy"],
+    shiftHeld ? ["⇧F6", "Rename"] : ["F6", "Move"],
+    ["F7", "MkDir"],
+    ["F8", "Delete"],
+    ["Space", "Select"],
+    ["*", "All"],
+    ["Tab", "Switch"],
+    ["Enter", "Open"],
+    ["⌫", "Up"],
+  ]);
 </script>
 
 <main class="app">
@@ -409,7 +539,7 @@
   <!-- Phase 2 seam: the terminal command line lives here; Esc will draw the
        panels aside as a curtain over it (SPEC §5.7 / §6). -->
   <nav class="fkeys" aria-label="function keys">
-    {#each [["F3", "View"], ["F4", "Edit"], ["F5", "Copy"], ["F6", "Move"], ["F7", "MkDir"], ["F8", "Delete"], ["Space", "Select"], ["*", "All"], ["Tab", "Switch"], ["Enter", "Open"], ["⌫", "Up"]] as [key, name]}
+    {#each fkeys as [key, name]}
       <span class="fkey"><b>{key}</b> {name}</span>
     {/each}
   </nav>
@@ -438,6 +568,42 @@
         <div class="buttons">
           <button onclick={() => void confirmDest()}>{destPrompt.op === "copy" ? "Copy" : "Move"}</button>
           <button onclick={cancelDest}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {:else if textPrompt}
+    <div class="overlay" role="presentation">
+      <div class="dialog">
+        <h2>{textPrompt.kind === "mkdir" ? "Create directory:" : "Rename to:"}</h2>
+        {#if textPrompt.kind === "rename"}
+          <input
+            class="dest-input"
+            type="text"
+            bind:value={textPrompt.value}
+            use:renameFocus
+            onkeydown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); void confirmText(); }
+              else if (e.key === "Escape") { e.preventDefault(); cancelText(); }
+            }}
+          />
+        {:else}
+          <input
+            class="dest-input"
+            type="text"
+            bind:value={textPrompt.value}
+            use:autofocus
+            onkeydown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); void confirmText(); }
+              else if (e.key === "Escape") { e.preventDefault(); cancelText(); }
+            }}
+          />
+        {/if}
+        {#if textPrompt.error}
+          <p class="inline-error">{textPrompt.error}</p>
+        {/if}
+        <div class="buttons">
+          <button onclick={() => void confirmText()}>{textPrompt.kind === "mkdir" ? "Create" : "Rename"}</button>
+          <button onclick={cancelText}>Cancel</button>
         </div>
       </div>
     </div>
@@ -473,6 +639,25 @@
             <button onclick={() => void answerCollision("overwrite_all")}>Overwrite A<u>l</u>l</button>
           {/if}
           <button onclick={() => void answerCollision("cancel")}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {:else if deleteConfirm}
+    <div class="overlay" role="presentation">
+      <div class="dialog">
+        <h2>Delete?</h2>
+        <p class="path" title={deleteConfirm.label}>{deleteConfirm.label}</p>
+        <label class="trash-toggle">
+          <input
+            type="checkbox"
+            checked={snapshot.trash_default}
+            onchange={() => void toggleTrash()}
+          />
+          Move to <u>T</u>rash
+        </label>
+        <div class="buttons">
+          <button onclick={() => void confirmDelete()}><u>D</u>elete</button>
+          <button onclick={() => (deleteConfirm = null)}>Cancel</button>
         </div>
       </div>
     </div>
@@ -674,6 +859,18 @@
   }
   .dest-input:focus {
     outline: none;
+  }
+  .inline-error {
+    margin: 0 0 12px;
+    color: #d86b6b;
+  }
+  .trash-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 12px;
+    cursor: pointer;
+    user-select: none;
   }
   .buttons {
     display: flex;

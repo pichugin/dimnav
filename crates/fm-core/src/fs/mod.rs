@@ -210,6 +210,50 @@ fn by_name(a: &Entry, b: &Entry) -> std::cmp::Ordering {
     a.name.to_lowercase().cmp(&b.name.to_lowercase())
 }
 
+/// Create a directory named `name` inside `parent` (F7, §5.4). `name` may be a
+/// nested relative path (`a/b/c`), created in full. Returns a human-readable error
+/// on failure. Idempotent: creating an existing directory succeeds.
+pub fn make_dir(parent: &Path, name: &str) -> Result<(), String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("directory name cannot be empty".to_string());
+    }
+    let target = parent.join(name);
+    fs::create_dir_all(&target).map_err(|e| format!("could not create directory: {e}"))
+}
+
+/// Rename the entry `old` to `new` in place inside `dir` (Shift+F6, §5.4). This is a
+/// pure in-place rename: `new` must be a bare filename (no path separator), so it
+/// can never silently turn into a move. Refuses to rename `..`, and **errors if a
+/// file named `new` already exists** rather than overwriting it (§5.4a — never
+/// silently overwrite).
+pub fn rename_entry(dir: &Path, old: &str, new: &str) -> Result<(), String> {
+    if old == ".." {
+        return Err("cannot rename the parent directory".to_string());
+    }
+    let new = new.trim();
+    if new.is_empty() {
+        return Err("name cannot be empty".to_string());
+    }
+    if new == "." || new == ".." {
+        return Err("invalid name".to_string());
+    }
+    if new.chars().any(std::path::is_separator) {
+        return Err("name cannot contain a path separator".to_string());
+    }
+    if new == old {
+        return Ok(()); // no-op rename
+    }
+
+    let target = dir.join(new);
+    // `symlink_metadata` (not `exists`) so a broken symlink occupying the name still
+    // counts as a collision.
+    if fs::symlink_metadata(&target).is_ok() {
+        return Err(format!("a file named \"{new}\" already exists"));
+    }
+    fs::rename(dir.join(old), &target).map_err(|e| format!("could not rename: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +301,36 @@ mod tests {
         let listing = list_dir("/definitely/not/a/real/path/xyzzy", true);
         let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, [".."]);
+    }
+
+    #[test]
+    fn make_dir_creates_nested_and_rejects_empty() {
+        let dir = make_fixture();
+        assert!(make_dir(&dir, "new/inner").is_ok());
+        assert!(dir.join("new/inner").is_dir());
+        assert!(make_dir(&dir, "   ").is_err());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn rename_entry_moves_name_and_guards_collisions() {
+        let dir = make_fixture(); // has gamma.txt, alpha/, Beta/
+
+        // Happy path.
+        assert!(rename_entry(&dir, "gamma.txt", "delta.txt").is_ok());
+        assert!(!dir.join("gamma.txt").exists());
+        assert!(dir.join("delta.txt").exists());
+
+        // Collision: alpha already exists.
+        let err = rename_entry(&dir, "Beta", "alpha").unwrap_err();
+        assert!(err.contains("already exists"));
+        assert!(dir.join("Beta").is_dir()); // untouched
+
+        // Refuse `..`, separators, and empty names.
+        assert!(rename_entry(&dir, "..", "x").is_err());
+        assert!(rename_entry(&dir, "delta.txt", "a/b").is_err());
+        assert!(rename_entry(&dir, "delta.txt", "  ").is_err());
+
+        fs::remove_dir_all(&dir).ok();
     }
 }

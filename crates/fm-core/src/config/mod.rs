@@ -59,5 +59,9 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         // File operations (§5.4).
         bind("op.copy", &["F5"]),
         bind("op.move", &["F6"]),
+        bind("op.rename", &["Shift+F6"]),
+        bind("op.mkdir", &["F7"]),
+        // Forward-delete key ("Delete"), distinct from Backspace (nav.parent).
+        bind("op.delete", &["F8", "Delete"]),
     ]
 }
