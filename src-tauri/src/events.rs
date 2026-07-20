@@ -9,7 +9,9 @@
 //! in the plan (Part C). Emitting them is feature work; defining them now makes
 //! the event contract concrete in the generated bindings.
 
-use fm_core::types::{CollisionPrompt, OpErrorInfo, OpOutcome, OpProgress, PanelChanged};
+use fm_core::types::{
+    CollisionPrompt, ExecDone, ExecOutput, OpErrorInfo, OpOutcome, OpProgress, PanelChanged,
+};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use tauri_specta::Event;
@@ -47,3 +49,16 @@ pub struct PanelChangedEvent(pub PanelChanged);
 /// Config was reloaded (hot reload — nice-to-have). No payload.
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 pub struct ConfigChangedEvent;
+
+/// One line of stdout/stderr from a running executable (Enter-on-executable,
+/// §5.5). Phase 1 appends these to the output modal.
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+#[serde(transparent)]
+#[specta(transparent)]
+pub struct ExecOutputEvent(pub ExecOutput);
+
+/// A running executable finished (§5.5).
+#[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
+#[serde(transparent)]
+#[specta(transparent)]
+pub struct ExecDoneEvent(pub ExecDone);

@@ -235,7 +235,7 @@ pub enum ErrorResolution {
 
 /// How to open a file with an external tool: system default, or the configured
 /// viewer (F3) / editor (F4) for its type (§5.5).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum OpenAction {
     Open,
@@ -317,6 +317,22 @@ pub struct PanelChanged {
     pub state: PanelState,
 }
 
+/// One line of output from a running executable (§5.5 / §5.7). Phase 1 renders
+/// these into a simple output modal; Phase 2 routes the same stream into the
+/// embedded terminal (the `plugin::ExecutionSink` seam) without changing callers.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ExecOutput {
+    pub line: String,
+}
+
+/// A run started by Enter-on-executable has finished (§5.5). `code` is the
+/// process exit code, or `-1` when it was killed / had no code.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ExecDone {
+    pub code: i32,
+    pub summary: String,
+}
+
 // ---------------------------------------------------------------------------
 // Config (persisted, TOML)
 // ---------------------------------------------------------------------------
@@ -351,12 +367,27 @@ impl Default for PanelPrefs {
     }
 }
 
+/// One file-type → external-application mapping (§5.5 / §7). Associates a set of
+/// extensions with the app to launch for each action; `None` for an action means
+/// "fall back to the system default (`open`)". Matched case-insensitively on the
+/// entry's extension, no leading dot (e.g. `"md"`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct FileAssociation {
+    /// Lower-case extensions this mapping claims, e.g. `["md", "markdown"]`.
+    pub extensions: Vec<String>,
+    /// App for the default Open action (Enter / double-click).
+    pub open: Option<String>,
+    /// App for View (F3, read-only); falls back to `open` then system default.
+    pub view: Option<String>,
+    /// App for Edit (F4, read-write); falls back to `open` then system default.
+    pub edit: Option<String>,
+}
+
 /// Root config document (serialized to TOML). Ships with working defaults — the
 /// app is fully usable with zero configuration (§7).
 ///
-/// Keybindings and the file-type→application map are deliberately omitted from
-/// the scaffold so we don't freeze an unreviewed schema; they join here with
-/// feature work.
+/// Keybindings are deliberately omitted from the scaffold so we don't freeze an
+/// unreviewed schema; they join here with feature work.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Config {
     pub left_panel: PanelPrefs,
@@ -365,6 +396,10 @@ pub struct Config {
     pub trash_default: bool,
     /// Id of the active theme.
     pub theme: String,
+    /// File-type → external-application map (§5.5). Empty by default, so every
+    /// file opens with the system default until the config-persistence slice
+    /// makes this TOML user-editable; the resolution logic ships now.
+    pub associations: Vec<FileAssociation>,
 }
 
 impl Default for Config {
@@ -374,6 +409,7 @@ impl Default for Config {
             right_panel: PanelPrefs::default(),
             trash_default: false,
             theme: "classic".to_string(),
+            associations: Vec::new(),
         }
     }
 }

@@ -6,6 +6,7 @@
 
 mod commands;
 mod events;
+mod exec_runtime;
 mod ops_runtime;
 
 use tauri_specta::{collect_commands, collect_events, Builder};
@@ -39,6 +40,8 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::resolve_collision,
             commands::resolve_error,
             commands::cancel_op,
+            commands::open_entry,
+            commands::cancel_exec,
         ])
         .events(collect_events![
             events::OpProgressEvent,
@@ -47,6 +50,8 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             events::OpCompleteEvent,
             events::PanelChangedEvent,
             events::ConfigChangedEvent,
+            events::ExecOutputEvent,
+            events::ExecDoneEvent,
         ])
 }
 
@@ -85,6 +90,9 @@ pub fn run() {
         // In-flight file operations (copy/move), so command handlers can answer
         // prompts and cancel a running op.
         .manage(ops_runtime::OpRegistry::default())
+        // The single running executable (Enter-on-executable), so `cancel_exec`
+        // can kill it (§5.5).
+        .manage(exec_runtime::ExecState::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

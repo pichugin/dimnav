@@ -18,6 +18,7 @@
 //! - [`fs`]     — filesystem engine: structured listings, metadata, async ops.
 //! - [`nav`]    — the single cursor-index state machine + selection model (§5.2/§5.3).
 //! - [`ops`]    — copy/move/delete pipeline: collisions, recursion guard, results.
+//! - [`open`]   — Open/View/Edit routing: file-type→app decision, execute vs launch (§5.5).
 //! - [`config`] — TOML config load/save; per-panel persistence; trash flag.
 //! - [`plugin`] — extension-point traits (Phase 1: definitions only, no loader).
 //! - [`state`]  — the two-panel app navigation state container.
@@ -27,6 +28,7 @@ pub mod config;
 pub mod fs;
 pub mod nav;
 pub mod ops;
+pub mod open;
 pub mod plugin;
 pub mod state;
 pub mod types;

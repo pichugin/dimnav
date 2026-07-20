@@ -63,5 +63,9 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         bind("op.mkdir", &["F7"]),
         // Forward-delete key ("Delete"), distinct from Backspace (nav.parent).
         bind("op.delete", &["F8", "Delete"]),
+        // Open / View / Edit external tools (§5.5). Enter (nav.enter) opens files
+        // via the system default; F3/F4 route to the configured viewer/editor.
+        bind("open.view", &["F3"]),
+        bind("open.edit", &["F4"]),
     ]
 }

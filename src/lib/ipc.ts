@@ -11,6 +11,7 @@ import type {
   ErrorResolution,
   Motion,
   NavTarget,
+  OpenAction,
   OpKind,
   PanelId,
   Resolution,
@@ -34,12 +35,15 @@ export type {
   PanelId,
   KeyBinding,
   OpKind,
+  OpenAction,
   Resolution,
   ErrorResolution,
   OpProgress,
   OpOutcome,
   CollisionPrompt,
   OpErrorInfo,
+  ExecOutput,
+  ExecDone,
 } from "./bindings";
 
 /** Result envelope produced by tauri-specta for `Result`-returning commands. */
@@ -96,4 +100,16 @@ export const ops = {
   resolveError: (opId: string, resolution: ErrorResolution) =>
     unwrap(commands.resolveError(opId, resolution)),
   cancelOp: (opId: string) => unwrap(commands.cancelOp(opId)),
+};
+
+/**
+ * Open / View / Edit API (§5.5). `openEntry` opens the entry under the given
+ * panel's cursor with an external tool — Open uses the system default (and runs
+ * executables, streaming output via {@link events.execOutputEvent}); View/Edit
+ * route to the configured tool. `cancelExec` kills a running executable.
+ */
+export const open = {
+  openEntry: (panel: PanelId, action: OpenAction) =>
+    unwrap(commands.openEntry(panel, action)),
+  cancelExec: () => unwrap(commands.cancelExec()),
 };

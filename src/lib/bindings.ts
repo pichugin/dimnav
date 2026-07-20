@@ -103,11 +103,23 @@ export const commands = {
 	resolveError: (opId: string, resolution: ErrorResolution) => typedError<null, string>(__TAURI_INVOKE("resolve_error", { opId, resolution })),
 	/**  Request cancellation of a running op; the engine stops between items (§5.4a). */
 	cancelOp: (opId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_op", { opId })),
+	/**
+	 *  Open the entry under `panel`'s cursor with an external tool. `Open` (Enter)
+	 *  uses the system default and *runs* executables; `View` (F3) / `Edit` (F4) route
+	 *  to the configured viewer/editor for the file type, falling back to the system
+	 *  default. The core (`fm_core::open::plan_open`) makes the launch-vs-execute and
+	 *  which-app decision; this handler only performs the OS side-effect (SPEC §3).
+	 */
+	openEntry: (panel: PanelId, action: OpenAction) => typedError<null, string>(__TAURI_INVOKE("open_entry", { panel, action })),
+	/**  Kill the executable currently running in the output modal, if any (§5.5). */
+	cancelExec: () => typedError<null, string>(__TAURI_INVOKE("cancel_exec")),
 };
 
 /** Events */
 export const events = {
 	configChangedEvent: makeEvent<ConfigChangedEvent>("config-changed-event"),
+	execDoneEvent: makeEvent<ExecDoneEvent>("exec-done-event"),
+	execOutputEvent: makeEvent<ExecOutputEvent>("exec-output-event"),
 	opCollisionEvent: makeEvent<OpCollisionEvent>("op-collision-event"),
 	opCompleteEvent: makeEvent<OpCompleteEvent>("op-complete-event"),
 	opErrorEvent: makeEvent<OpErrorEvent>("op-error-event"),
@@ -146,9 +158,8 @@ export type CollisionPrompt = {
  *  Root config document (serialized to TOML). Ships with working defaults — the
  *  app is fully usable with zero configuration (§7).
  * 
- *  Keybindings and the file-type→application map are deliberately omitted from
- *  the scaffold so we don't freeze an unreviewed schema; they join here with
- *  feature work.
+ *  Keybindings are deliberately omitted from the scaffold so we don't freeze an
+ *  unreviewed schema; they join here with feature work.
  */
 export type Config = {
 	left_panel: PanelPrefs,
@@ -157,6 +168,12 @@ export type Config = {
 	trash_default: boolean,
 	/**  Id of the active theme. */
 	theme: string,
+	/**
+	 *  File-type → external-application map (§5.5). Empty by default, so every
+	 *  file opens with the system default until the config-persistence slice
+	 *  makes this TOML user-editable; the resolution logic ships now.
+	 */
+	associations: FileAssociation[],
 };
 
 /**  Config was reloaded (hot reload — nice-to-have). No payload. */
@@ -201,6 +218,50 @@ export type EntryMarker = "ok" | "denied" | "broken";
  *  (§5.6).
  */
 export type ErrorResolution = "retry" | "skip" | "skip_all" | "cancel" | "elevate";
+
+/**
+ *  A run started by Enter-on-executable has finished (§5.5). `code` is the
+ *  process exit code, or `-1` when it was killed / had no code.
+ */
+export type ExecDone = {
+	code: number,
+	summary: string,
+};
+
+/**  A running executable finished (§5.5). */
+export type ExecDoneEvent = ExecDone;
+
+/**
+ *  One line of output from a running executable (§5.5 / §5.7). Phase 1 renders
+ *  these into a simple output modal; Phase 2 routes the same stream into the
+ *  embedded terminal (the `plugin::ExecutionSink` seam) without changing callers.
+ */
+export type ExecOutput = {
+	line: string,
+};
+
+/**
+ *  One line of stdout/stderr from a running executable (Enter-on-executable,
+ *  §5.5). Phase 1 appends these to the output modal.
+ */
+export type ExecOutputEvent = ExecOutput;
+
+/**
+ *  One file-type → external-application mapping (§5.5 / §7). Associates a set of
+ *  extensions with the app to launch for each action; `None` for an action means
+ *  "fall back to the system default (`open`)". Matched case-insensitively on the
+ *  entry's extension, no leading dot (e.g. `"md"`).
+ */
+export type FileAssociation = {
+	/**  Lower-case extensions this mapping claims, e.g. `["md", "markdown"]`. */
+	extensions: string[],
+	/**  App for the default Open action (Enter / double-click). */
+	open: string | null,
+	/**  App for View (F3, read-only); falls back to `open` then system default. */
+	view: string | null,
+	/**  App for Edit (F4, read-write); falls back to `open` then system default. */
+	edit: string | null,
+};
 
 /**
  *  One keybinding: an action id (e.g. `"cursor.down"`) and the key chords bound
@@ -276,6 +337,12 @@ export type OpProgressEvent = OpProgress;
 
 /**  Terminal status of an operation (§5.4a / §5.6). */
 export type OpStatus = "pending" | "success" | "partial" | "failed" | "cancelled";
+
+/**
+ *  How to open a file with an external tool: system default, or the configured
+ *  viewer (F3) / editor (F4) for its type (§5.5).
+ */
+export type OpenAction = "open" | "view" | "edit";
 
 /**
  *  Payload for a panel-state change pushed by the core, e.g. the directory

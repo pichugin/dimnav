@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { nav, ops, events } from "./lib/ipc";
+  import { nav, ops, open, events } from "./lib/ipc";
   import type {
     AppSnapshot,
     Entry,
@@ -68,6 +68,10 @@
   // prompt can stay open for the user to retype.
   type TextPrompt = { kind: "mkdir" | "rename"; value: string; error?: string };
   let textPrompt = $state<TextPrompt | null>(null);
+  // The output modal for a running executable (Enter-on-executable, §5.5). Opens
+  // lazily when the first exec event arrives; the Phase-2 terminal replaces it.
+  type ExecView = { lines: string[]; done: boolean; code: number };
+  let execView = $state<ExecView | null>(null);
 
   // chord string -> action id, built from the core-provided keymap.
   let keymapByChord: Record<string, string> = {};
@@ -197,14 +201,27 @@
   }
 
   // Mouse: double-click behaves like Enter — focus the entry, then navigate into
-  // it (dir/`..`); files are a no-op until the open-files slice.
+  // it (dir / symlink / `..`) or open a file with the system default (§5.5).
   async function openEntry(side: PanelId, index: number) {
     try {
       if (snapshot.active !== side) snapshot = await nav.setActivePanel(side);
       snapshot = await nav.setCursor(side, index);
-      snapshot = await nav.navigate(side, { kind: "into" });
+      await activateFocused(side);
     } catch (err) {
       status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  // Enter / double-click behavior on the focused entry: directories, symlinks,
+  // and `..` navigate; any other entry opens with the system default. The core
+  // no-ops `navigate` on files and `open_entry` on dirs, so this split is clean.
+  async function activateFocused(side: PanelId) {
+    const p = snapshot[side];
+    const entry = p.entries[p.cursor_index];
+    if (!entry || entry.name === ".." || entry.kind === "dir" || entry.kind === "symlink") {
+      snapshot = await nav.navigate(side, { kind: "into" });
+    } else {
+      await open.openEntry(side, "open");
     }
   }
 
@@ -349,6 +366,16 @@
     }
   }
 
+  // Kill the executable running in the output modal (§5.5). The backend reaps it
+  // and emits the done event, which flips the modal to its finished state.
+  async function cancelExec() {
+    try {
+      await open.cancelExec();
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
   // Keyboard handling while a (non-text) op modal is open. Returns true only when
   // the key maps to a modal action, so the caller can preventDefault just those.
   function handleModalKey(e: KeyboardEvent): boolean {
@@ -384,6 +411,15 @@
       if (e.key === "Escape") { void cancelActiveOp(); return true; }
       return false;
     }
+    if (execView) {
+      // Esc cancels a running executable; once finished it closes the modal.
+      if (e.key === "Escape") {
+        if (execView.done) execView = null;
+        else void cancelExec();
+        return true;
+      }
+      return false;
+    }
     return false;
   }
 
@@ -394,7 +430,7 @@
     if (destPrompt || textPrompt) return;
     // Other op modals consume their own keys and otherwise block navigation —
     // but must let OS/browser shortcuts (Cmd/Ctrl combos, e.g. Cmd+Q) through.
-    if (activeOp || prompt || deleteConfirm) {
+    if (activeOp || prompt || deleteConfirm || execView) {
       if (e.metaKey || e.ctrlKey) return;
       if (handleModalKey(e)) e.preventDefault();
       return;
@@ -415,6 +451,10 @@
         openMkdir();
       } else if (action === "op.rename") {
         openRename();
+      } else if (action === "open.view") {
+        await open.openEntry(active, "view");
+      } else if (action === "open.edit") {
+        await open.openEntry(active, "edit");
       } else if (action.startsWith("cursor.")) {
         snapshot = await nav.moveCursor(active, action.slice("cursor.".length) as Motion);
       } else if (action.startsWith("select.")) {
@@ -428,7 +468,7 @@
       } else if (action === "panel.switch") {
         snapshot = await nav.setActivePanel(active === "left" ? "right" : "left");
       } else if (action === "nav.enter") {
-        snapshot = await nav.navigate(active, { kind: "into" });
+        await activateFocused(active);
       } else if (action === "nav.parent") {
         snapshot = await nav.navigate(active, { kind: "parent" });
       }
@@ -496,6 +536,26 @@
             prompt = null;
             status = o.summary;
             void refreshBoth();
+          }),
+        );
+
+        // Executable run output (Enter-on-executable, §5.5). The modal opens
+        // lazily on the first event so a plain file-open (no events) never shows
+        // one. Reassign (not mutate) so Svelte's reactivity fires.
+        unlisten.push(
+          await events.execOutputEvent.listen((e) => {
+            const line = e.payload.line;
+            execView = execView
+              ? { ...execView, lines: [...execView.lines, line] }
+              : { lines: [line], done: false, code: 0 };
+          }),
+        );
+        unlisten.push(
+          await events.execDoneEvent.listen((e) => {
+            const { code } = e.payload;
+            execView = execView
+              ? { ...execView, done: true, code }
+              : { lines: [], done: true, code };
           }),
         );
 
@@ -722,6 +782,24 @@
         <p class="count">{activeOp.done} / {activeOp.total} ({pct(activeOp)}%)</p>
         <div class="buttons">
           <button onclick={() => void cancelActiveOp()}>Cancel</button>
+        </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Executable output modal (§5.5). Independent of the op chain above; the
+       Phase-2 terminal (Esc curtain) replaces this pane. -->
+  {#if execView}
+    <div class="overlay" role="presentation">
+      <div class="dialog exec">
+        <h2>{execView.done ? `Finished — exit ${execView.code}` : "Running…"}</h2>
+        <pre class="exec-output">{execView.lines.join("\n") || "…"}</pre>
+        <div class="buttons">
+          {#if execView.done}
+            <button onclick={() => (execView = null)}>Close</button>
+          {:else}
+            <button onclick={() => void cancelExec()}>Cancel</button>
+          {/if}
         </div>
       </div>
     </div>
@@ -987,5 +1065,26 @@
   .count {
     margin: 0 0 12px;
     color: var(--fg-dim);
+  }
+
+  /* Executable output modal (§5.5). Wider, with a scrollable monospace pane. */
+  .dialog.exec {
+    min-width: 520px;
+    max-width: 80vw;
+  }
+  .exec-output {
+    max-height: 50vh;
+    margin: 0 0 12px;
+    padding: 8px;
+    overflow: auto;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
   }
 </style>

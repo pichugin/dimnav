@@ -12,15 +12,17 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 
+use fm_core::open::OpenPlan;
 use fm_core::state::AppState;
 use fm_core::types::{
     AppSnapshot, Config, DeleteRequest, DirListing, EntryKind, ErrorResolution, KeyBinding, Motion,
-    NavTarget, OpKind, OpRequest, PanelId, Resolution,
+    NavTarget, OpKind, OpenAction, OpRequest, PanelId, Resolution,
 };
 use tauri::{AppHandle, State};
 use tauri_specta::Event;
 
 use crate::events::OpCompleteEvent;
+use crate::exec_runtime::{self, ExecState};
 use crate::ops_runtime::{registry, OpRegistry, TauriObserver, UserInput};
 
 /// Tauri-managed shared navigation state.
@@ -567,4 +569,78 @@ pub fn resolve_error(
 pub fn cancel_op(registry_state: State<'_, OpRegistry>, op_id: String) -> Result<(), String> {
     registry_state.cancel(&op_id);
     Ok(())
+}
+
+// --- Open / View / Edit (§5.5) ----------------------------------------------
+
+/// Open the entry under `panel`'s cursor with an external tool. `Open` (Enter)
+/// uses the system default and *runs* executables; `View` (F3) / `Edit` (F4) route
+/// to the configured viewer/editor for the file type, falling back to the system
+/// default. The core (`fm_core::open::plan_open`) makes the launch-vs-execute and
+/// which-app decision; this handler only performs the OS side-effect (SPEC §3).
+#[tauri::command]
+#[specta::specta]
+pub fn open_entry(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    exec_state: State<'_, ExecState>,
+    panel: PanelId,
+    action: OpenAction,
+) -> Result<(), String> {
+    let (entry, cwd) = {
+        let s = state.lock().map_err(lock_err)?;
+        let p = s.panel(panel);
+        (p.entries.get(p.cursor_index).cloned(), p.path.clone())
+    };
+    let Some(entry) = entry else {
+        return Ok(()); // empty panel — nothing under the cursor
+    };
+
+    let config = fm_core::config::load();
+    let Some(plan) = fm_core::open::plan_open(&entry, action, &cwd, &config) else {
+        return Ok(()); // `..` or a directory — navigation handles those, not opening
+    };
+
+    match plan {
+        OpenPlan::Launch { path, app: with_app } => launch(&path, with_app.as_deref()),
+        OpenPlan::Execute { path, cwd } => exec_runtime::spawn_exec(app, &exec_state, path, cwd),
+    }
+}
+
+/// Kill the executable currently running in the output modal, if any (§5.5).
+#[tauri::command]
+#[specta::specta]
+pub fn cancel_exec(exec_state: State<'_, ExecState>) -> Result<(), String> {
+    exec_runtime::cancel(&exec_state);
+    Ok(())
+}
+
+/// Launch `path` in an external application. `app == None` → the system default
+/// ("Open"); `Some(app)` names a specific application. macOS-only for now; Phase 4
+/// adds Windows/Linux arms. The app never handles the file itself — it hands off
+/// to the OS launcher (§5.5).
+#[cfg(target_os = "macos")]
+fn launch(path: &str, app: Option<&str>) -> Result<(), String> {
+    use std::process::Command;
+    let mut cmd = Command::new("/usr/bin/open");
+    if let Some(app) = app {
+        cmd.arg("-a").arg(app);
+    }
+    cmd.arg(path);
+    let status = cmd
+        .status()
+        .map_err(|e| format!("failed to launch `open`: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        match app {
+            Some(app) => Err(format!("could not open with \"{app}\"")),
+            None => Err(format!("could not open {path}")),
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn launch(_path: &str, _app: Option<&str>) -> Result<(), String> {
+    Err("opening files is not supported on this platform yet".to_string())
 }
