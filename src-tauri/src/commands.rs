@@ -16,7 +16,7 @@ use fm_core::open::OpenPlan;
 use fm_core::state::AppState;
 use fm_core::types::{
     AppSnapshot, Config, DeleteRequest, DirListing, EntryKind, ErrorResolution, KeyBinding, Motion,
-    NavTarget, OpKind, OpenAction, OpRequest, PanelId, Resolution,
+    NavTarget, OpKind, OpenAction, OpRequest, PanelId, Resolution, SortMode, ViewMode,
 };
 use tauri::{AppHandle, State};
 use tauri_specta::Event;
@@ -37,6 +37,24 @@ fn home_dir() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
 }
 
+/// The directory a panel should open at: its persisted `start_dir` when that
+/// still exists, otherwise home (§7 — a stale config must never strand a panel).
+fn start_dir(prefs: &fm_core::types::PanelPrefs) -> String {
+    match prefs.start_dir.as_deref() {
+        Some(d) if Path::new(d).is_dir() => d.to_string(),
+        _ => home_dir(),
+    }
+}
+
+/// Persist the current preferences off the caller's thread. Panel state is folded
+/// into the config first so there is exactly one path from live state to disk
+/// (§5.8). Write failures are non-fatal by design — see `fm_core::config::save`.
+fn persist(state: &mut fm_core::state::AppState) {
+    state.sync_prefs_from_panels();
+    let config = state.config.clone();
+    tauri::async_runtime::spawn_blocking(move || fm_core::config::save(&config));
+}
+
 // --- Liveness / config ------------------------------------------------------
 
 /// Liveness check used to verify the IPC pipeline round-trips.
@@ -46,11 +64,12 @@ pub fn ping() -> String {
     "pong".to_string()
 }
 
-/// Return the current configuration (Phase 1: defaults).
+/// Return the configuration currently in effect (loaded from TOML at `init`, §7).
 #[tauri::command]
 #[specta::specta]
-pub fn get_config() -> Config {
-    fm_core::config::load()
+pub fn get_config(state: State<'_, SharedState>) -> Result<Config, String> {
+    let s = state.lock().map_err(lock_err)?;
+    Ok(s.config.clone())
 }
 
 /// The active keymap (action id → key chords), sourced from core config so the
@@ -65,34 +84,107 @@ pub fn get_keymap() -> Vec<KeyBinding> {
 /// stateful commands below).
 #[tauri::command]
 #[specta::specta]
-pub fn list_dir(path: String, show_hidden: bool) -> DirListing {
-    fm_core::fs::list_dir(&path, show_hidden)
+pub fn list_dir(path: String, show_hidden: bool, sort: SortMode) -> DirListing {
+    fm_core::fs::list_dir(&path, show_hidden, sort)
 }
 
 // --- Stateful navigation ----------------------------------------------------
 
-/// Populate both panels with their starting directory (home). Call once on boot.
+/// Load the persisted configuration and populate both panels from it — each panel
+/// reopens its last directory with its own view/sort/hidden state (§5.8 / §7),
+/// falling back to home when a remembered directory is gone. Call once on boot.
 #[tauri::command]
 #[specta::specta]
 pub async fn init(state: State<'_, SharedState>) -> Result<AppSnapshot, String> {
-    let home = home_dir();
-    let (show_left, show_right) = {
-        let s = state.lock().map_err(lock_err)?;
-        (s.left.show_hidden, s.right.show_hidden)
-    };
-
-    let (hl, hr) = (home.clone(), home);
-    let left = tauri::async_runtime::spawn_blocking(move || fm_core::fs::list_dir(&hl, show_left))
+    let config = tauri::async_runtime::spawn_blocking(fm_core::config::load)
         .await
         .map_err(|e| e.to_string())?;
-    let right =
-        tauri::async_runtime::spawn_blocking(move || fm_core::fs::list_dir(&hr, show_right))
-            .await
-            .map_err(|e| e.to_string())?;
+
+    let (dir_left, dir_right) = (start_dir(&config.left_panel), start_dir(&config.right_panel));
+    let (pl, pr) = (config.left_panel.clone(), config.right_panel.clone());
+
+    {
+        let mut s = state.lock().map_err(lock_err)?;
+        s.apply_config(config);
+    }
+
+    let left = tauri::async_runtime::spawn_blocking(move || {
+        fm_core::fs::list_dir(&dir_left, pl.show_hidden, pl.sort_mode)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    let right = tauri::async_runtime::spawn_blocking(move || {
+        fm_core::fs::list_dir(&dir_right, pr.show_hidden, pr.sort_mode)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     let mut s = state.lock().map_err(lock_err)?;
     fm_core::nav::set_listing(&mut s.left, left);
     fm_core::nav::set_listing(&mut s.right, right);
+    Ok(s.snapshot())
+}
+
+// --- Per-panel view state (§5.8) --------------------------------------------
+
+/// Set a panel's view mode — 1/2/3-column brief or the detailed single-column
+/// mode. Pure layout: no directory re-read is needed, only the cursor geometry
+/// the frontend re-reports afterwards. Persisted per panel.
+#[tauri::command]
+#[specta::specta]
+pub fn set_view_mode(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+    mode: ViewMode,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    s.panel_mut(panel).view_mode = mode;
+    persist(&mut s);
+    Ok(s.snapshot())
+}
+
+/// Set a panel's sort mode (§5.8). Re-sorts the entries already loaded — no I/O —
+/// keeping the cursor and selection on the same entries. Persisted per panel.
+#[tauri::command]
+#[specta::specta]
+pub fn set_sort_mode(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+    mode: SortMode,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    let p = s.panel_mut(panel);
+    p.sort_mode = mode;
+    fm_core::nav::resort(p);
+    persist(&mut s);
+    Ok(s.snapshot())
+}
+
+/// Show or hide dotfiles in a panel (§5.8 — shown by default). Needs a re-read,
+/// which runs off the state lock; the cursor and selection survive by name.
+/// Persisted per panel.
+#[tauri::command]
+#[specta::specta]
+pub async fn set_show_hidden(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+    value: bool,
+) -> Result<AppSnapshot, String> {
+    let (path, sort) = {
+        let mut s = state.lock().map_err(lock_err)?;
+        let p = s.panel_mut(panel);
+        p.show_hidden = value;
+        (p.path.clone(), p.sort_mode)
+    };
+
+    let listing =
+        tauri::async_runtime::spawn_blocking(move || fm_core::fs::list_dir(&path, value, sort))
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::set_listing_preserving(s.panel_mut(panel), listing);
+    persist(&mut s);
     Ok(s.snapshot())
 }
 
@@ -208,14 +300,14 @@ pub async fn navigate(
     target: NavTarget,
 ) -> Result<AppSnapshot, String> {
     // Capture what we need from state, then drop the lock before any I/O.
-    let (cur_path, show_hidden, cursor_entry) = {
+    let (cur_path, show_hidden, sort, cursor_entry) = {
         let s = state.lock().map_err(lock_err)?;
         let p = s.panel(panel);
         let entry = p
             .entries
             .get(p.cursor_index)
             .map(|e| (e.name.clone(), e.kind));
-        (p.path.clone(), p.show_hidden, entry)
+        (p.path.clone(), p.show_hidden, p.sort_mode, entry)
     };
 
     // Resolve the destination path and, for a parent hop, the child to land on.
@@ -254,10 +346,11 @@ pub async fn navigate(
         return Ok(s.snapshot());
     };
 
-    let listing =
-        tauri::async_runtime::spawn_blocking(move || fm_core::fs::list_dir(&path, show_hidden))
-            .await
-            .map_err(|e| e.to_string())?;
+    let listing = tauri::async_runtime::spawn_blocking(move || {
+        fm_core::fs::list_dir(&path, show_hidden, sort)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     let mut s = state.lock().map_err(lock_err)?;
     let p = s.panel_mut(panel);
@@ -265,6 +358,8 @@ pub async fn navigate(
     if let Some(name) = exited_child {
         fm_core::nav::position_on(p, &name);
     }
+    // Remember the new directory so the next launch reopens here (§7).
+    persist(&mut s);
     Ok(s.snapshot())
 }
 
@@ -273,24 +368,21 @@ pub async fn navigate(
 #[tauri::command]
 #[specta::specta]
 pub async fn refresh(state: State<'_, SharedState>, panel: PanelId) -> Result<AppSnapshot, String> {
-    let (path, show_hidden, focused) = {
+    let (path, show_hidden, sort) = {
         let s = state.lock().map_err(lock_err)?;
         let p = s.panel(panel);
-        let focused = p.entries.get(p.cursor_index).map(|e| e.name.clone());
-        (p.path.clone(), p.show_hidden, focused)
+        (p.path.clone(), p.show_hidden, p.sort_mode)
     };
 
-    let listing =
-        tauri::async_runtime::spawn_blocking(move || fm_core::fs::list_dir(&path, show_hidden))
-            .await
-            .map_err(|e| e.to_string())?;
+    let listing = tauri::async_runtime::spawn_blocking(move || {
+        fm_core::fs::list_dir(&path, show_hidden, sort)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     let mut s = state.lock().map_err(lock_err)?;
-    let p = s.panel_mut(panel);
-    fm_core::nav::set_listing(p, listing);
-    if let Some(name) = focused {
-        fm_core::nav::position_on(p, &name);
-    }
+    // Cursor *and* selection follow the entries by name across the re-read (§5.6).
+    fm_core::nav::set_listing_preserving(s.panel_mut(panel), listing);
     Ok(s.snapshot())
 }
 
@@ -307,10 +399,10 @@ pub async fn create_dir(
     panel: PanelId,
     name: String,
 ) -> Result<AppSnapshot, String> {
-    let (path, show_hidden) = {
+    let (path, show_hidden, sort) = {
         let s = state.lock().map_err(lock_err)?;
         let p = s.panel(panel);
-        (p.path.clone(), p.show_hidden)
+        (p.path.clone(), p.show_hidden, p.sort_mode)
     };
 
     fm_core::fs::make_dir(Path::new(&path), &name)?;
@@ -322,10 +414,11 @@ pub async fn create_dir(
         .and_then(|c| c.as_os_str().to_str())
         .map(str::to_string);
 
-    let listing =
-        tauri::async_runtime::spawn_blocking(move || fm_core::fs::list_dir(&path, show_hidden))
-            .await
-            .map_err(|e| e.to_string())?;
+    let listing = tauri::async_runtime::spawn_blocking(move || {
+        fm_core::fs::list_dir(&path, show_hidden, sort)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     let mut s = state.lock().map_err(lock_err)?;
     let p = s.panel_mut(panel);
@@ -347,7 +440,7 @@ pub async fn rename(
     panel: PanelId,
     new_name: String,
 ) -> Result<AppSnapshot, String> {
-    let (path, show_hidden, old) = {
+    let (path, show_hidden, sort, old) = {
         let s = state.lock().map_err(lock_err)?;
         let p = s.panel(panel);
         let old = p
@@ -355,16 +448,17 @@ pub async fn rename(
             .get(p.cursor_index)
             .map(|e| e.name.clone())
             .ok_or_else(|| "nothing to rename".to_string())?;
-        (p.path.clone(), p.show_hidden, old)
+        (p.path.clone(), p.show_hidden, p.sort_mode, old)
     };
 
     fm_core::fs::rename_entry(Path::new(&path), &old, &new_name)?;
     let focus = new_name.trim().to_string();
 
-    let listing =
-        tauri::async_runtime::spawn_blocking(move || fm_core::fs::list_dir(&path, show_hidden))
-            .await
-            .map_err(|e| e.to_string())?;
+    let listing = tauri::async_runtime::spawn_blocking(move || {
+        fm_core::fs::list_dir(&path, show_hidden, sort)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
 
     let mut s = state.lock().map_err(lock_err)?;
     let p = s.panel_mut(panel);
@@ -461,7 +555,7 @@ pub fn start_transfer(
 }
 
 /// Set the global "Move to Trash" default (the delete-dialog checkbox), OFF by
-/// default (§5.4a). In-memory this slice — persistence lands with the config slice.
+/// default and persisted across sessions (§5.4a).
 #[tauri::command]
 #[specta::specta]
 pub fn set_trash_default(
@@ -469,7 +563,8 @@ pub fn set_trash_default(
     value: bool,
 ) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
-    s.trash_default = value;
+    s.config.trash_default = value;
+    persist(&mut s);
     Ok(s.snapshot())
 }
 
@@ -510,7 +605,7 @@ pub fn start_delete(
 
         DeleteRequest {
             paths,
-            to_trash: s.trash_default,
+            to_trash: s.trash_default(),
         }
     };
 
@@ -587,16 +682,19 @@ pub fn open_entry(
     panel: PanelId,
     action: OpenAction,
 ) -> Result<(), String> {
-    let (entry, cwd) = {
+    let (entry, cwd, config) = {
         let s = state.lock().map_err(lock_err)?;
         let p = s.panel(panel);
-        (p.entries.get(p.cursor_index).cloned(), p.path.clone())
+        (
+            p.entries.get(p.cursor_index).cloned(),
+            p.path.clone(),
+            s.config.clone(),
+        )
     };
     let Some(entry) = entry else {
         return Ok(()); // empty panel — nothing under the cursor
     };
 
-    let config = fm_core::config::load();
     let Some(plan) = fm_core::open::plan_open(&entry, action, &cwd, &config) else {
         return Ok(()); // `..` or a directory — navigation handles those, not opening
     };

@@ -21,9 +21,8 @@ use crate::types::{DirListing, Entry, EntryKind, EntryMarker, SortMode};
 /// a filesystem root (§5.2). Unreadable children become marker entries rather
 /// than aborting the listing (§5.6).
 ///
-/// Entries are returned sorted per [`SortMode::NameFoldersFirst`] (the default,
-/// §5.8) with `..` pinned to the top.
-pub fn list_dir(path: &str, show_hidden: bool) -> DirListing {
+/// Entries are returned sorted per `sort` (§5.8) with `..` pinned to the top.
+pub fn list_dir(path: &str, show_hidden: bool, sort: SortMode) -> DirListing {
     let p = Path::new(path);
     let mut entries: Vec<Entry> = Vec::new();
 
@@ -43,7 +42,7 @@ pub fn list_dir(path: &str, show_hidden: bool) -> DirListing {
         }
     }
 
-    sort_entries(&mut children, SortMode::NameFoldersFirst);
+    sort_entries(&mut children, sort);
     entries.extend(children);
 
     DirListing {
@@ -178,9 +177,17 @@ fn is_executable(_meta: &std::fs::Metadata) -> bool {
     false
 }
 
-/// Sort a listing in place. `..` (and any parent entry) stays pinned first;
-/// everything else orders per `mode`. The default `NameFoldersFirst` groups
-/// directories before files, then case-insensitive by name (§5.8).
+/// Sort a listing in place. `..` (and any parent entry) stays pinned first, and
+/// directories are grouped ahead of files in **every** mode — FAR behaviour, and
+/// what makes a two-panel listing readable (§5.8). Within those groups:
+///
+/// - `NameFoldersFirst` (default): case-insensitive by name.
+/// - `TypeName`: by extension, then by name.
+/// - `Size`: largest first (directories carry no meaningful size, so they fall
+///   back to name).
+/// - `Date`: newest first.
+///
+/// Ties always break on name, so every mode is a total, stable-looking order.
 pub fn sort_entries(entries: &mut [Entry], mode: SortMode) {
     entries.sort_by(|a, b| {
         // Pin `..` to the very top regardless of mode.
@@ -190,12 +197,18 @@ pub fn sort_entries(entries: &mut [Entry], mode: SortMode) {
             return b_dotdot.cmp(&a_dotdot); // dotdot (true) sorts first
         }
 
-        match mode {
-            SortMode::NameFoldersFirst => folders_first(a, b).then(by_name(a, b)),
-            SortMode::TypeName => folders_first(a, b).then(by_name(a, b)),
-            SortMode::Size => a.size.cmp(&b.size).then(by_name(a, b)),
-            SortMode::Date => a.modified.cmp(&b.modified).then(by_name(a, b)),
-        }
+        let grouped = folders_first(a, b);
+        let both_dirs = a.kind == EntryKind::Dir && b.kind == EntryKind::Dir;
+
+        let within = match mode {
+            SortMode::NameFoldersFirst => by_name(a, b),
+            SortMode::TypeName => by_ext(a, b).then(by_name(a, b)),
+            // Directories have no meaningful size; order them by name instead.
+            SortMode::Size if both_dirs => by_name(a, b),
+            SortMode::Size => b.size.cmp(&a.size).then(by_name(a, b)),
+            SortMode::Date => b.modified.cmp(&a.modified).then(by_name(a, b)),
+        };
+        grouped.then(within)
     });
 }
 
@@ -208,6 +221,20 @@ fn folders_first(a: &Entry, b: &Entry) -> std::cmp::Ordering {
 /// Case-insensitive name comparison.
 fn by_name(a: &Entry, b: &Entry) -> std::cmp::Ordering {
     a.name.to_lowercase().cmp(&b.name.to_lowercase())
+}
+
+/// Case-insensitive extension comparison; extension-less entries sort first. A
+/// leading dot does not start an extension (`.gitignore` has none), matching how
+/// the listing colours already classify names.
+fn by_ext(a: &Entry, b: &Entry) -> std::cmp::Ordering {
+    ext_of(&a.name).cmp(&ext_of(&b.name))
+}
+
+fn ext_of(name: &str) -> String {
+    match name.rfind('.') {
+        Some(i) if i > 0 => name[i + 1..].to_lowercase(),
+        _ => String::new(),
+    }
 }
 
 /// Create a directory named `name` inside `parent` (F7, §5.4). `name` may be a
@@ -280,14 +307,14 @@ mod tests {
         let dir = make_fixture();
 
         // Hidden shown: `..`, then folders (alpha, Beta case-insensitive), then file.
-        let shown = list_dir(dir.to_str().unwrap(), true);
+        let shown = list_dir(dir.to_str().unwrap(), true, SortMode::NameFoldersFirst);
         let names: Vec<&str> = shown.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["..", "alpha", "Beta", ".hidden", "gamma.txt"]);
         assert_eq!(shown.entries[0].kind, EntryKind::Dir); // ..
         assert_eq!(shown.entries[1].kind, EntryKind::Dir); // alpha
 
         // Hidden filtered out.
-        let hidden = list_dir(dir.to_str().unwrap(), false);
+        let hidden = list_dir(dir.to_str().unwrap(), false, SortMode::NameFoldersFirst);
         let names: Vec<&str> = hidden.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["..", "alpha", "Beta", "gamma.txt"]);
 
@@ -298,9 +325,61 @@ mod tests {
     fn unreadable_dir_yields_only_dotdot_not_a_panic() {
         // A path that does not exist: read_dir fails, but we still get a listing
         // with `..` and no crash (§5.6).
-        let listing = list_dir("/definitely/not/a/real/path/xyzzy", true);
+        let listing = list_dir(
+            "/definitely/not/a/real/path/xyzzy",
+            true,
+            SortMode::NameFoldersFirst,
+        );
         let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, [".."]);
+    }
+
+    /// A bare entry for the pure sorting tests.
+    fn ent(name: &str, kind: EntryKind, size: u64, modified: i64) -> Entry {
+        Entry {
+            name: name.to_string(),
+            kind,
+            size,
+            modified,
+            permissions: 0,
+            symlink_target: None,
+            is_executable: false,
+            marker: EntryMarker::Ok,
+        }
+    }
+
+    #[test]
+    fn every_sort_mode_pins_dotdot_and_groups_folders_first() {
+        let sample = || {
+            vec![
+                ent("m.txt", EntryKind::File, 50, 300),
+                ent("..", EntryKind::Dir, 0, 0),
+                ent("a.zip", EntryKind::File, 10, 100),
+                ent("zeta", EntryKind::Dir, 0, 900),
+                ent("b.txt", EntryKind::File, 500, 200),
+                ent("alpha", EntryKind::Dir, 0, 50),
+            ]
+        };
+        let names = |v: &[Entry]| -> Vec<String> { v.iter().map(|e| e.name.clone()).collect() };
+
+        let mut v = sample();
+        sort_entries(&mut v, SortMode::NameFoldersFirst);
+        assert_eq!(names(&v), ["..", "alpha", "zeta", "a.zip", "b.txt", "m.txt"]);
+
+        // Extension first (txt before zip), then name within an extension.
+        let mut v = sample();
+        sort_entries(&mut v, SortMode::TypeName);
+        assert_eq!(names(&v), ["..", "alpha", "zeta", "b.txt", "m.txt", "a.zip"]);
+
+        // Largest first; dirs have no size so they stay in name order.
+        let mut v = sample();
+        sort_entries(&mut v, SortMode::Size);
+        assert_eq!(names(&v), ["..", "alpha", "zeta", "b.txt", "m.txt", "a.zip"]);
+
+        // Newest first, folders still grouped ahead of files.
+        let mut v = sample();
+        sort_entries(&mut v, SortMode::Date);
+        assert_eq!(names(&v), ["..", "zeta", "alpha", "m.txt", "b.txt", "a.zip"]);
     }
 
     #[test]

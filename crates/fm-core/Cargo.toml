@@ -11,6 +11,12 @@ serde = { workspace = true }
 # not a UI/webview concern, so it does not violate the swappable-frontend rule.
 specta = { workspace = true }
 
+# Config persistence (SPEC §7): a human-readable TOML document in the OS config
+# directory. Both crates are platform-agnostic and tauri-free, so the config
+# system can live wholly in the core (CLAUDE.md: all logic in the Rust core).
+toml = "0.8"
+dirs = "5"
+
 # NOTE: `tauri` is intentionally absent here and must stay that way. `cargo tree
 # -p fm-core` showing no tauri is the structural proof of the swappable-frontend
 # boundary (SPEC §3 / CLAUDE.md non-negotiable rules).

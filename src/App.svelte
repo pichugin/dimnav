@@ -11,6 +11,7 @@
     PanelId,
     PanelState,
     Resolution,
+    SortMode,
     ViewMode,
   } from "./lib/ipc";
   import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -187,6 +188,79 @@
   async function measureAll() {
     await measure("left");
     await measure("right");
+  }
+
+  // --- Per-panel view state (§5.8) ------------------------------------------
+  // The core owns and persists these; the UI only forwards the intent and, for a
+  // view-mode change, re-reports the new geometry so the cursor math matches what
+  // is actually rendered.
+
+  // Order of the sort dropdown, and the cycle order for the keyboard shortcut.
+  const SORTS: { id: SortMode; label: string }[] = [
+    { id: "name_folders_first", label: "Name" },
+    { id: "type_name", label: "Type" },
+    { id: "size", label: "Size" },
+    { id: "date", label: "Date" },
+  ];
+
+  const VIEWS: { id: string; label: string; mode: ViewMode }[] = [
+    { id: "1", label: "1 col", mode: { kind: "columns", columns: 1 } },
+    { id: "2", label: "2 col", mode: { kind: "columns", columns: 2 } },
+    { id: "3", label: "3 col", mode: { kind: "columns", columns: 3 } },
+    { id: "detailed", label: "Detail", mode: { kind: "detailed" } },
+  ];
+
+  function viewId(vm: ViewMode): string {
+    return vm.kind === "detailed" ? "detailed" : String(vm.columns);
+  }
+
+  async function setView(side: PanelId, mode: ViewMode) {
+    try {
+      snapshot = await nav.setViewMode(side, mode);
+      await tick();
+      await measure(side); // column count changed — re-report the geometry
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  async function setSort(side: PanelId, mode: SortMode) {
+    try {
+      snapshot = await nav.setSortMode(side, mode);
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  async function cycleSort(side: PanelId) {
+    const i = SORTS.findIndex((s) => s.id === snapshot[side].sort_mode);
+    await setSort(side, SORTS[(i + 1) % SORTS.length].id);
+  }
+
+  async function setHidden(side: PanelId, value: boolean) {
+    try {
+      snapshot = await nav.setShowHidden(side, value);
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  // --- Detailed-mode formatting (pure presentation) -------------------------
+
+  function fmtDate(unixSeconds: number): string {
+    if (!unixSeconds) return "";
+    const d = new Date(unixSeconds * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${p(d.getFullYear() % 100)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
+  function fmtPerms(mode: number): string {
+    const bits = "rwxrwxrwx";
+    let out = "";
+    for (let i = 0; i < 9; i++) {
+      out += mode & (1 << (8 - i)) ? bits[i] : "-";
+    }
+    return out;
   }
 
   // Mouse: single-click focuses the clicked entry (and activates its panel). The
@@ -471,6 +545,13 @@
         await activateFocused(active);
       } else if (action === "nav.parent") {
         snapshot = await nav.navigate(active, { kind: "parent" });
+      } else if (action === "panel.toggle_hidden") {
+        await setHidden(active, !snapshot[active].show_hidden);
+      } else if (action === "panel.cycle_sort") {
+        await cycleSort(active);
+      } else if (action.startsWith("panel.view_")) {
+        const which = action.slice("panel.view_".length);
+        await setView(active, which === "detailed" ? { kind: "detailed" } : { kind: "columns", columns: Number(which) });
       }
     } catch (err) {
       status = `error: ${String(err)}`;
@@ -615,26 +696,75 @@
       >
         <header class="panel-head">
           <span class="path" title={p.path}>{p.path || "…"}</span>
-          <span class="view-ctl">{p.view_mode.kind === "columns" ? `${p.view_mode.columns}-col` : "detail"}</span>
+          <!-- Per-panel view controls (§5.8). Clicks are stopped so they never
+               reach the panel's activate handler. -->
+          <span class="panel-ctls" role="presentation" onclick={(e) => e.stopPropagation()}>
+            <button
+              class="ctl toggle"
+              class:on={p.show_hidden}
+              title="Hidden files ({p.show_hidden ? "shown" : "hidden"}) — Ctrl+H"
+              aria-pressed={p.show_hidden}
+              onclick={() => void setHidden(side, !p.show_hidden)}
+            >.*</button>
+            <select
+              class="ctl"
+              title="Sort order — Ctrl+S cycles"
+              value={p.sort_mode}
+              onchange={(e) => void setSort(side, e.currentTarget.value as SortMode)}
+            >
+              {#each SORTS as s}<option value={s.id}>{s.label}</option>{/each}
+            </select>
+            <select
+              class="ctl"
+              title="View mode — Ctrl+1/2/3/4"
+              value={viewId(p.view_mode)}
+              onchange={(e) => void setView(side, VIEWS.find((v) => v.id === e.currentTarget.value)!.mode)}
+            >
+              {#each VIEWS as v}<option value={v.id}>{v.label}</option>{/each}
+            </select>
+          </span>
         </header>
 
-        <div class="listing" bind:this={listingEls[side]} style={gridStyle(L.cols, L.rows)}>
-          {#each L.pageEntries as entry, i}
-            {@const gi = L.pageStart + i}
-            <div
-              class="row kind-{entry.kind} {entryClass(entry)}"
-              class:cursor={gi === p.cursor_index}
-              class:inactive={snapshot.active !== side}
-              class:selected={p.selection.includes(gi)}
-              class:denied={entry.marker === "denied"}
-              role="presentation"
-              onclick={(e) => { e.stopPropagation(); void focusEntry(side, gi); }}
-              ondblclick={(e) => { e.stopPropagation(); void openEntry(side, gi); }}
-            >
-              {label(entry)}
-            </div>
-          {/each}
-        </div>
+        {#if p.view_mode.kind === "detailed"}
+          <div class="listing detailed" bind:this={listingEls[side]}>
+            {#each L.pageEntries as entry, i}
+              {@const gi = L.pageStart + i}
+              <div
+                class="row detail-row kind-{entry.kind} {entryClass(entry)}"
+                class:cursor={gi === p.cursor_index}
+                class:inactive={snapshot.active !== side}
+                class:selected={p.selection.includes(gi)}
+                class:denied={entry.marker === "denied"}
+                role="presentation"
+                onclick={(e) => { e.stopPropagation(); void focusEntry(side, gi); }}
+                ondblclick={(e) => { e.stopPropagation(); void openEntry(side, gi); }}
+              >
+                <span class="d-name">{label(entry)}</span>
+                <span class="d-size">{entry.kind === "dir" ? "<DIR>" : humanSize(entry.size)}</span>
+                <span class="d-date">{fmtDate(entry.modified)}</span>
+                <span class="d-perms">{entry.name === ".." ? "" : fmtPerms(entry.permissions)}</span>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="listing" bind:this={listingEls[side]} style={gridStyle(L.cols, L.rows)}>
+            {#each L.pageEntries as entry, i}
+              {@const gi = L.pageStart + i}
+              <div
+                class="row kind-{entry.kind} {entryClass(entry)}"
+                class:cursor={gi === p.cursor_index}
+                class:inactive={snapshot.active !== side}
+                class:selected={p.selection.includes(gi)}
+                class:denied={entry.marker === "denied"}
+                role="presentation"
+                onclick={(e) => { e.stopPropagation(); void focusEntry(side, gi); }}
+                ondblclick={(e) => { e.stopPropagation(); void openEntry(side, gi); }}
+              >
+                {label(entry)}
+              </div>
+            {/each}
+          </div>
+        {/if}
 
         <footer class="panel-foot">
           <span>
@@ -860,12 +990,60 @@
     white-space: nowrap;
   }
 
+  /* Per-panel view controls (§5.8). Deliberately plain — terminal-flavoured
+     restraint (§4) — and sized so the header row keeps its height. */
+  .panel-ctls {
+    display: flex;
+    gap: 4px;
+    flex: none;
+  }
+  .ctl {
+    font: inherit;
+    font-size: 11px;
+    color: var(--fg-dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 0 3px;
+    cursor: pointer;
+  }
+  .ctl:hover {
+    color: var(--fg);
+  }
+  .ctl.toggle.on {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
   .listing {
     flex: 1;
     display: grid;
     padding: 2px 0;
     overflow: hidden;
     min-height: 0;
+  }
+  /* Detailed mode: one column, metadata alongside each name (§5.2). */
+  .listing.detailed {
+    display: block;
+  }
+  .detail-row {
+    display: grid;
+    grid-template-columns: 1fr 6ch 14ch 9ch;
+    gap: 8px;
+  }
+  .detail-row > span {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .d-size,
+  .d-date,
+  .d-perms {
+    color: var(--fg-dim);
+    text-align: right;
+  }
+  .d-perms {
+    font-variant-numeric: tabular-nums;
   }
 
   .row {
@@ -914,6 +1092,12 @@
   .row.cursor {
     background: var(--accent);
     color: var(--accent-fg);
+  }
+  /* On a highlighted detail row the metadata must follow the row's colour, or the
+     dim grey becomes unreadable against the cursor fill. */
+  .detail-row.cursor > span,
+  .detail-row.selected > span {
+    color: inherit;
   }
   /* Cursor in the inactive panel: outlined rather than filled. */
   .row.cursor.inactive {

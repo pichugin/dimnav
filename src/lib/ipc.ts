@@ -15,6 +15,8 @@ import type {
   OpKind,
   PanelId,
   Resolution,
+  SortMode,
+  ViewMode,
 } from "./bindings";
 
 export { commands, events } from "./bindings";
@@ -69,6 +71,13 @@ export const nav = {
   setCursor: (panel: PanelId, index: number) =>
     unwrap(commands.setCursor(panel, index)),
   setActivePanel: (panel: PanelId) => unwrap(commands.setActivePanel(panel)),
+  // Per-panel view state (§5.8) — the core persists each change to config.toml.
+  setViewMode: (panel: PanelId, mode: ViewMode) =>
+    unwrap(commands.setViewMode(panel, mode)),
+  setSortMode: (panel: PanelId, mode: SortMode) =>
+    unwrap(commands.setSortMode(panel, mode)),
+  setShowHidden: (panel: PanelId, value: boolean) =>
+    unwrap(commands.setShowHidden(panel, value)),
   navigate: (panel: PanelId, target: NavTarget) =>
     unwrap(commands.navigate(panel, target)),
   refresh: (panel: PanelId) => unwrap(commands.refresh(panel)),

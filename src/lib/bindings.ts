@@ -11,15 +11,19 @@ export const commands = {
 	 *  List a directory into a structured [`DirListing`] (utility; panels use the
 	 *  stateful commands below).
 	 */
-	listDir: (path: string, showHidden: boolean) => __TAURI_INVOKE<DirListing>("list_dir", { path, showHidden }),
-	/**  Return the current configuration (Phase 1: defaults). */
-	getConfig: () => __TAURI_INVOKE<Config>("get_config"),
+	listDir: (path: string, showHidden: boolean, sort: SortMode) => __TAURI_INVOKE<DirListing>("list_dir", { path, showHidden, sort }),
+	/**  Return the configuration currently in effect (loaded from TOML at `init`, §7). */
+	getConfig: () => typedError<Config, string>(__TAURI_INVOKE("get_config")),
 	/**
 	 *  The active keymap (action id → key chords), sourced from core config so the
 	 *  webview never hardcodes keys (SPEC §6).
 	 */
 	getKeymap: () => __TAURI_INVOKE<KeyBinding[]>("get_keymap"),
-	/**  Populate both panels with their starting directory (home). Call once on boot. */
+	/**
+	 *  Load the persisted configuration and populate both panels from it — each panel
+	 *  reopens its last directory with its own view/sort/hidden state (§5.8 / §7),
+	 *  falling back to home when a remembered directory is gone. Call once on boot.
+	 */
 	init: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("init")),
 	/**
 	 *  Report a panel's rendered layout so the cursor state machine can compute the
@@ -36,6 +40,23 @@ export const commands = {
 	setCursor: (panel: PanelId, index: number) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_cursor", { panel, index })),
 	/**  Set the active (focused) panel (SPEC §5.1). */
 	setActivePanel: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_active_panel", { panel })),
+	/**
+	 *  Set a panel's view mode — 1/2/3-column brief or the detailed single-column
+	 *  mode. Pure layout: no directory re-read is needed, only the cursor geometry
+	 *  the frontend re-reports afterwards. Persisted per panel.
+	 */
+	setViewMode: (panel: PanelId, mode: ViewMode) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_view_mode", { panel, mode })),
+	/**
+	 *  Set a panel's sort mode (§5.8). Re-sorts the entries already loaded — no I/O —
+	 *  keeping the cursor and selection on the same entries. Persisted per panel.
+	 */
+	setSortMode: (panel: PanelId, mode: SortMode) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_sort_mode", { panel, mode })),
+	/**
+	 *  Show or hide dotfiles in a panel (§5.8 — shown by default). Needs a re-read,
+	 *  which runs off the state lock; the cursor and selection survive by name.
+	 *  Persisted per panel.
+	 */
+	setShowHidden: (panel: PanelId, value: boolean) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_show_hidden", { panel, value })),
 	/**  Toggle selection of the entry under the cursor (Space). `..` is a no-op. */
 	toggleSelection: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("toggle_selection", { panel })),
 	/**  Additively select the entry under the cursor, then move (Shift+Arrow). */
@@ -70,7 +91,7 @@ export const commands = {
 	rename: (panel: PanelId, newName: string) => typedError<AppSnapshot, string>(__TAURI_INVOKE("rename", { panel, newName })),
 	/**
 	 *  Set the global "Move to Trash" default (the delete-dialog checkbox), OFF by
-	 *  default (§5.4a). In-memory this slice — persistence lands with the config slice.
+	 *  default and persisted across sessions (§5.4a).
 	 */
 	setTrashDefault: (value: boolean) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_trash_default", { value })),
 	/**
@@ -158,22 +179,25 @@ export type CollisionPrompt = {
  *  Root config document (serialized to TOML). Ships with working defaults — the
  *  app is fully usable with zero configuration (§7).
  * 
- *  Keybindings are deliberately omitted from the scaffold so we don't freeze an
- *  unreviewed schema; they join here with feature work.
+ *  Field order matters: TOML rejects a plain value emitted after a table, so the
+ *  scalars come first and the panel tables / association array-of-tables last.
+ *  `serde(default)` means a partial or hand-edited file still loads.
+ * 
+ *  Keybindings are deliberately omitted so we don't freeze an unreviewed schema;
+ *  they join here with the remapping slice.
  */
 export type Config = {
-	left_panel: PanelPrefs,
-	right_panel: PanelPrefs,
 	/**  Global "Move to Trash" default — OFF by default, persisted (§5.4a). */
-	trash_default: boolean,
+	trash_default?: boolean,
 	/**  Id of the active theme. */
-	theme: string,
+	theme?: string,
+	left_panel?: PanelPrefs,
+	right_panel?: PanelPrefs,
 	/**
 	 *  File-type → external-application map (§5.5). Empty by default, so every
-	 *  file opens with the system default until the config-persistence slice
-	 *  makes this TOML user-editable; the resolution logic ships now.
+	 *  file opens with the system default until the user edits the TOML.
 	 */
-	associations: FileAssociation[],
+	associations?: FileAssociation[],
 };
 
 /**  Config was reloaded (hot reload — nice-to-have). No payload. */
@@ -254,13 +278,13 @@ export type ExecOutputEvent = ExecOutput;
  */
 export type FileAssociation = {
 	/**  Lower-case extensions this mapping claims, e.g. `["md", "markdown"]`. */
-	extensions: string[],
+	extensions?: string[],
 	/**  App for the default Open action (Enter / double-click). */
-	open: string | null,
+	open?: string | null,
 	/**  App for View (F3, read-only); falls back to `open` then system default. */
-	view: string | null,
+	view?: string | null,
 	/**  App for Edit (F4, read-write); falls back to `open` then system default. */
-	edit: string | null,
+	edit?: string | null,
 };
 
 /**
@@ -369,13 +393,19 @@ export type PanelGeometry = {
 /**  Which panel an intent targets. The two-panel model is the app's core (§5.1). */
 export type PanelId = "left" | "right";
 
-/**  Persisted per-panel preferences, restored on the next launch (§5.8 / §7). */
+/**
+ *  Persisted per-panel preferences, restored on the next launch (§5.8 / §7).
+ * 
+ *  Field order matters: TOML requires plain values before tables, and `view_mode`
+ *  serializes as a table (`{kind, columns}`), so it comes last. `serde(default)`
+ *  lets a hand-edited, partial config still load (§7 — zero-config must work).
+ */
 export type PanelPrefs = {
 	/**  Directory the panel opens to; `None` means a sensible default (e.g. home). */
-	start_dir: string | null,
-	view_mode: ViewMode,
-	sort_mode: SortMode,
-	show_hidden: boolean,
+	start_dir?: string | null,
+	sort_mode?: SortMode,
+	show_hidden?: boolean,
+	view_mode?: ViewMode,
 };
 
 /**  The full state of one panel — the unit the frontend renders. */

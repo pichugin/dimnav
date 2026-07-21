@@ -65,6 +65,54 @@ pub fn set_listing(state: &mut PanelState, listing: DirListing) {
     state.selection.clear();
 }
 
+/// Replace a panel's listing **for the same directory**, keeping the user's place:
+/// the cursor stays on the entry it was on and the selection survives, both matched
+/// by name rather than index (indices shift when the sort mode or the directory
+/// contents change). Names that have disappeared are simply dropped.
+///
+/// This is what a refresh, a sort/hidden-file change, and a post-operation re-read
+/// should use; [`set_listing`] (cursor to top, selection cleared) is for actually
+/// changing directory.
+pub fn set_listing_preserving(state: &mut PanelState, listing: DirListing) {
+    let focused = state
+        .entries
+        .get(state.cursor_index)
+        .map(|e| e.name.clone());
+    let selected: Vec<String> = state
+        .selection
+        .iter()
+        .filter_map(|&i| state.entries.get(i))
+        .map(|e| e.name.clone())
+        .collect();
+
+    set_listing(state, listing);
+
+    state.selection = state
+        .entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| is_selectable(e) && selected.contains(&e.name))
+        .map(|(i, _)| i)
+        .collect();
+    if let Some(name) = focused {
+        position_on(state, &name);
+    }
+}
+
+/// Re-apply the panel's current sort mode to the entries already loaded, keeping
+/// the cursor and selection on the same entries (§5.8). No I/O — switching sort
+/// order never needs to re-read the directory.
+pub fn resort(state: &mut PanelState) {
+    // The entries are cloned rather than moved out: `set_listing_preserving` reads
+    // the *current* cursor/selection names off the panel, so it must still see the
+    // old listing when it is called.
+    let listing = DirListing {
+        path: state.path.clone(),
+        entries: state.entries.clone(),
+    };
+    set_listing_preserving(state, listing);
+}
+
 /// Move the cursor to an explicit index, clamped to `[0, len-1]` (0 when empty).
 /// Backs mouse-click focus: the frontend reports the clicked entry's global index
 /// and the core owns the resulting cursor position, same as [`move_cursor`].
@@ -373,5 +421,83 @@ mod tests {
         move_cursor(&mut p, Motion::Down);
         move_cursor(&mut p, Motion::Down);
         assert_eq!(p.selection, vec![2]); // unchanged by navigation
+    }
+
+    /// A panel of named files in a fixed directory, sorted by name (the default).
+    fn named_panel(names: &[&str]) -> PanelState {
+        let mut p = PanelState {
+            path: "/dir".to_string(),
+            ..Default::default()
+        };
+        set_listing(
+            &mut p,
+            DirListing {
+                path: "/dir".to_string(),
+                entries: names
+                    .iter()
+                    .map(|n| ent(n, EntryKind::File))
+                    .collect(),
+            },
+        );
+        p
+    }
+
+    #[test]
+    fn resort_keeps_cursor_and_selection_on_the_same_entries() {
+        let mut p = named_panel(&["a.txt", "b.txt", "c.txt"]);
+        // Give them distinct sizes so Size order is the reverse of name order.
+        for (i, e) in p.entries.iter_mut().enumerate() {
+            e.size = (i + 1) as u64;
+        }
+        p.cursor_index = 0; // a.txt (smallest)
+        p.selection = vec![0, 2]; // a.txt, c.txt
+
+        p.sort_mode = crate::types::SortMode::Size;
+        resort(&mut p);
+
+        // Size sorts largest first: c, b, a.
+        let names: Vec<&str> = p.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["c.txt", "b.txt", "a.txt"]);
+        assert_eq!(p.entries[p.cursor_index].name, "a.txt"); // cursor followed
+        let mut sel: Vec<&str> = p.selection.iter().map(|&i| p.entries[i].name.as_str()).collect();
+        sel.sort_unstable();
+        assert_eq!(sel, ["a.txt", "c.txt"]); // selection followed
+    }
+
+    #[test]
+    fn preserving_relist_drops_names_that_vanished() {
+        let mut p = named_panel(&["a.txt", "b.txt", "c.txt"]);
+        p.cursor_index = 2; // c.txt
+        p.selection = vec![0, 1, 2];
+
+        // b.txt and c.txt are gone; d.txt appeared.
+        set_listing_preserving(
+            &mut p,
+            DirListing {
+                path: "/dir".to_string(),
+                entries: vec![
+                    ent("a.txt", EntryKind::File),
+                    ent("d.txt", EntryKind::File),
+                ],
+            },
+        );
+
+        // Only the survivor stays selected; the cursor falls back to the top since
+        // the entry it was on no longer exists.
+        assert_eq!(p.selection, vec![0]);
+        assert_eq!(p.entries[p.selection[0]].name, "a.txt");
+        assert_eq!(p.cursor_index, 0);
+    }
+
+    #[test]
+    fn preserving_relist_never_selects_dotdot() {
+        let mut p = panel_with_dotdot(3);
+        p.selection = vec![1];
+        let same = DirListing {
+            path: p.path.clone(),
+            entries: p.entries.clone(),
+        };
+        set_listing_preserving(&mut p, same);
+        assert_eq!(p.selection, vec![1]); // the real entry, never `..` at index 0
     }
 }

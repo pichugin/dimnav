@@ -347,22 +347,27 @@ pub struct KeyBinding {
 }
 
 /// Persisted per-panel preferences, restored on the next launch (§5.8 / §7).
+///
+/// Field order matters: TOML requires plain values before tables, and `view_mode`
+/// serializes as a table (`{kind, columns}`), so it comes last. `serde(default)`
+/// lets a hand-edited, partial config still load (§7 — zero-config must work).
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(default)]
 pub struct PanelPrefs {
     /// Directory the panel opens to; `None` means a sensible default (e.g. home).
     pub start_dir: Option<String>,
-    pub view_mode: ViewMode,
     pub sort_mode: SortMode,
     pub show_hidden: bool,
+    pub view_mode: ViewMode,
 }
 
 impl Default for PanelPrefs {
     fn default() -> Self {
         Self {
             start_dir: None,
-            view_mode: ViewMode::default(),
             sort_mode: SortMode::default(),
             show_hidden: true, // hidden files shown by default (§5.8)
+            view_mode: ViewMode::default(),
         }
     }
 }
@@ -372,6 +377,7 @@ impl Default for PanelPrefs {
 /// "fall back to the system default (`open`)". Matched case-insensitively on the
 /// entry's extension, no leading dot (e.g. `"md"`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+#[serde(default)]
 pub struct FileAssociation {
     /// Lower-case extensions this mapping claims, e.g. `["md", "markdown"]`.
     pub extensions: Vec<String>,
@@ -386,29 +392,33 @@ pub struct FileAssociation {
 /// Root config document (serialized to TOML). Ships with working defaults — the
 /// app is fully usable with zero configuration (§7).
 ///
-/// Keybindings are deliberately omitted from the scaffold so we don't freeze an
-/// unreviewed schema; they join here with feature work.
+/// Field order matters: TOML rejects a plain value emitted after a table, so the
+/// scalars come first and the panel tables / association array-of-tables last.
+/// `serde(default)` means a partial or hand-edited file still loads.
+///
+/// Keybindings are deliberately omitted so we don't freeze an unreviewed schema;
+/// they join here with the remapping slice.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(default)]
 pub struct Config {
-    pub left_panel: PanelPrefs,
-    pub right_panel: PanelPrefs,
     /// Global "Move to Trash" default — OFF by default, persisted (§5.4a).
     pub trash_default: bool,
     /// Id of the active theme.
     pub theme: String,
+    pub left_panel: PanelPrefs,
+    pub right_panel: PanelPrefs,
     /// File-type → external-application map (§5.5). Empty by default, so every
-    /// file opens with the system default until the config-persistence slice
-    /// makes this TOML user-editable; the resolution logic ships now.
+    /// file opens with the system default until the user edits the TOML.
     pub associations: Vec<FileAssociation>,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            left_panel: PanelPrefs::default(),
-            right_panel: PanelPrefs::default(),
             trash_default: false,
             theme: "classic".to_string(),
+            left_panel: PanelPrefs::default(),
+            right_panel: PanelPrefs::default(),
             associations: Vec::new(),
         }
     }
