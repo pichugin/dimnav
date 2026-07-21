@@ -414,6 +414,12 @@ export type PanelState = {
 	entries: Entry[],
 	/**  Index into `entries` of the entry under the cursor. */
 	cursor_index: number,
+	/**
+	 *  Index of the first visible entry — the top of the leftmost column. The
+	 *  panel scrolls as a sliding window, one entry at a time, rather than
+	 *  flipping whole pages (§5.2). Transient: never persisted.
+	 */
+	top_index: number,
 	/**  Indices of selected entries (§5.3). Persists across cursor movement. */
 	selection: number[],
 	view_mode: ViewMode,

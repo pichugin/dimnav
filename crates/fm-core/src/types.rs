@@ -103,6 +103,10 @@ pub struct PanelState {
     pub entries: Vec<Entry>,
     /// Index into `entries` of the entry under the cursor.
     pub cursor_index: usize,
+    /// Index of the first visible entry — the top of the leftmost column. The
+    /// panel scrolls as a sliding window, one entry at a time, rather than
+    /// flipping whole pages (§5.2). Transient: never persisted.
+    pub top_index: usize,
     /// Indices of selected entries (§5.3). Persists across cursor movement.
     pub selection: Vec<usize>,
     pub view_mode: ViewMode,
@@ -117,6 +121,7 @@ impl Default for PanelState {
             path: String::new(),
             entries: Vec::new(),
             cursor_index: 0,
+            top_index: 0,
             selection: Vec::new(),
             view_mode: ViewMode::default(),
             sort_mode: SortMode::default(),

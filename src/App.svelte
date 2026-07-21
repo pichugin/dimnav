@@ -26,6 +26,7 @@
       path: "",
       entries: [],
       cursor_index: 0,
+      top_index: 0,
       selection: [],
       view_mode: { kind: "columns", columns: 2 },
       sort_mode: "name_folders_first",
@@ -96,14 +97,16 @@
     return vm.kind === "columns" ? vm.columns : 1;
   }
 
-  // Column-major page layout for a panel: which slice of entries is visible and
-  // how to shape the grid. Mirrors the core's cursor math (SPEC §5.2).
+  // Column-major layout for a panel: which slice of entries is visible and how
+  // to shape the grid. The window origin is the core's `top_index` — the panel
+  // scrolls one entry at a time, it does not flip pages (SPEC §5.2) — clamped
+  // here only against a snapshot that is briefly out of step with the geometry.
   function layout(p: PanelState) {
     const rows = p.geometry.rows_per_column;
     const cols = rows > 0 ? colsOf(p.view_mode) : 1;
     const effRows = rows > 0 ? rows : Math.max(1, p.entries.length);
     const pageSize = Math.max(1, cols * effRows);
-    const pageStart = Math.floor(p.cursor_index / pageSize) * pageSize;
+    const pageStart = Math.min(p.top_index, Math.max(0, p.entries.length - pageSize));
     const pageEntries = p.entries.slice(pageStart, pageStart + pageSize);
     return { cols, rows: effRows, pageStart, pageEntries };
   }

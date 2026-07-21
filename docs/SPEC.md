@@ -76,23 +76,27 @@ A concern was raised about whether a webview-based UI can deliver the snappy key
 ### 5.2 Multi-column layout within a panel
 - Each panel's file list is displayed in **two columns** by default. (See Design Note below — column count may become width-adaptive.)
 - Cursor (down arrow) moves down the first column; upon reaching the bottom, it continues from the top of the second column. Up arrow is the inverse.
+- **The viewport is a sliding window, never a page flip** (orthodox behavior — Norton Commander, DOS Navigator, FAR). The visible entries are a contiguous window over the listing; a motion that would leave the window scrolls it by **that motion's own step**, no more:
+  - Down at the bottom of the **rightmost** column scrolls by **one entry**: the next file appears at the bottom right, the entry that was at the top of the rightmost column moves to the bottom of the column left of it, and the top entry of the leftmost column scrolls off. Up at the top of the leftmost column mirrors it.
+  - Right at the rightmost column scrolls by **one column**; the cursor keeps its on-screen row and stays in the rightmost column. Left at the leftmost column mirrors it.
+  - Page Up / Page Down scroll by a **full page**; the cursor keeps its on-screen position.
+  - The window is kept within the listing, so no blank space is shown below a listing longer than one page.
 - **Left/Right arrow semantics — explicit rule to avoid ambiguity:**
-  - Right moves the cursor one column to the right at the current row.
-  - If the cursor is already in the **rightmost** column, Right **paginates to the next page**, landing in the leftmost column at the same relative row.
-  - Once the **last page** is reached and there are no further columns/pages, a further Right moves the cursor to the **last file** in the listing.
-  - Left mirrors this exactly in reverse: moves one column left; if already in the **leftmost** column, **paginates up** to the previous page (landing in the rightmost column); once the **first page** is reached, a further Left eventually lands on the **first entry** (which is always `..`, see below).
-  - Net effect: Left/Right is a single continuous linear traversal across the whole listing (column-by-column, page-by-page), Up/Down traverse within the current page's columns. Implement as **one cursor-index state machine**, not two independent handlers.
+  - Right moves the cursor one column to the right at the current row — one column's worth of entries further into the listing, scrolling as above once the cursor is already in the rightmost column.
+  - Once the **end of the listing** is reached and there are no further columns, a further Right moves the cursor to the **last file** in the listing.
+  - Left mirrors this exactly in reverse; once the start of the listing is reached, a further Left eventually lands on the **first entry** (which is always `..`, see below).
+  - Net effect: Left/Right is a single continuous linear traversal across the whole listing (column by column), Up/Down traverse it entry by entry. Implement as **one cursor-index state machine** with a stored window origin, not two independent handlers.
 - **The first entry is always `..`** (parent directory), shown at the top of every non-root listing.
   - Pressing **Enter** on `..` navigates to the parent folder.
   - On arrival in the parent folder, the cursor **auto-positions onto the folder that was just exited** (the child directory the user came from), not the top of the list. This must be preserved so users can step in and out of folders fluidly.
 - **Copy/move to the other panel do NOT use arrow keys** — they are bound to F5/F6 (Section 6). Left/Right arrows are purely intra-panel cursor movement and never move files.
-- **Page Up / Page Down**: scroll by a full page of entries.
+- **Page Up / Page Down**: scroll by a full page of entries (see the sliding-window rule above).
 - **Home / End**: jump to the very first (`..`) / very last file in the directory listing.
 
 **View mode — column count is user-selectable, not fixed at two.** The number of columns is a per-panel setting, plus a dedicated **detailed mode** (single column with metadata — size, date, permissions — shown alongside each name).
 - Modes: 1-column, 2-column (default), 3+ columns (brief/name-only), and **detailed** (single-column with metadata).
 - Selectable **per panel** via a control at the top of that panel (mouse for now; keyboard shortcut strongly desired if a non-conflicting key is available).
-- The Left/Right pagination state machine above applies to the multi-column brief modes; detailed/1-column mode uses straightforward vertical Up/Down + PgUp/PgDn.
+- The Left/Right traversal above applies to the multi-column brief modes; detailed/1-column mode uses straightforward vertical Up/Down + PgUp/PgDn, over the same sliding window.
 - The selected mode is **persisted per panel in user preferences** and restored on restart.
 
 ### 5.3 Selection model

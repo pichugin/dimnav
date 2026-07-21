@@ -199,9 +199,7 @@ pub fn set_viewport(
     rows: u16,
 ) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
-    let p = s.panel_mut(panel);
-    p.geometry.columns = columns;
-    p.geometry.rows_per_column = rows;
+    fm_core::nav::set_geometry(s.panel_mut(panel), columns, rows);
     Ok(s.snapshot())
 }
 

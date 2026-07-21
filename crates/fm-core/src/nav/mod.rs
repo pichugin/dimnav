@@ -11,8 +11,15 @@
 //!   column at the same row; clamping past the ends lands on the last file / `..`).
 //! - PageDown/Up = `± (columns*rows_per_column)`; Home = 0; End = last.
 //!
-//! Everything is clamped to `[0, len-1]`. Scroll is derived (`cursor / page`), not
-//! stored. This is pure, I/O-free, and unit-tested below.
+//! Everything is clamped to `[0, len-1]`.
+//!
+//! The **viewport is a sliding window**, not a page grid: `top_index` is stored
+//! alongside the cursor and holds the first visible entry. Stepping off an edge
+//! scrolls by the motion's own step — one entry for Up/Down, one column for
+//! Left/Right, a full page for PageUp/Down — so the listing shifts smoothly the
+//! way the orthodox managers do, instead of flipping a screenful at a time. The
+//! window is kept inside `[0, len-page]` so no blank space shows below a long
+//! listing. This is pure, I/O-free, and unit-tested below.
 
 use std::path::Path;
 
@@ -26,19 +33,12 @@ pub fn move_cursor(state: &mut PanelState, motion: Motion) {
     let len = state.entries.len();
     if len == 0 {
         state.cursor_index = 0;
+        state.top_index = 0;
         return;
     }
     let last = len - 1;
     let cur = state.cursor_index.min(last);
-
-    // Effective geometry. A "column" of `rows` entries; a page of `cols*rows`.
-    let rows = if state.geometry.rows_per_column == 0 {
-        len
-    } else {
-        state.geometry.rows_per_column as usize
-    };
-    let cols = (state.geometry.columns as usize).max(1);
-    let page = rows.saturating_mul(cols).max(1);
+    let (rows, page) = geometry_of(state);
 
     let next = match motion {
         Motion::Up => cur.saturating_sub(1),
@@ -50,7 +50,68 @@ pub fn move_cursor(state: &mut PanelState, motion: Motion) {
         Motion::Home => 0,
         Motion::End => last,
     };
+
+    // Scroll by the motion's own step when the cursor leaves the window, so the
+    // listing shifts by one entry / one column / one page rather than jumping to
+    // a page boundary. Up/Down fall through to `top` and let `visible_top` do the
+    // minimal one-entry adjustment.
+    let max_top = len.saturating_sub(page);
+    let top = state.top_index.min(max_top);
+    let desired = match motion {
+        Motion::Home => 0,
+        Motion::End => max_top,
+        Motion::PageDown => (top + page).min(max_top),
+        Motion::PageUp => top.saturating_sub(page),
+        Motion::Right if next >= top + page => (top + rows).min(max_top),
+        Motion::Left if next < top => top.saturating_sub(rows),
+        _ => top,
+    };
+
     state.cursor_index = next;
+    state.top_index = visible_top(desired, next, page, max_top);
+}
+
+/// Effective `(rows_per_column, page_size)` for a panel. Geometry unset
+/// (`rows_per_column == 0`) means "one column spanning the whole listing", which
+/// keeps Down/Up working before the frontend has reported a viewport.
+fn geometry_of(state: &PanelState) -> (usize, usize) {
+    let len = state.entries.len().max(1);
+    let rows = if state.geometry.rows_per_column == 0 {
+        len
+    } else {
+        state.geometry.rows_per_column as usize
+    };
+    let cols = (state.geometry.columns as usize).max(1);
+    (rows, rows.saturating_mul(cols).max(1))
+}
+
+/// The smallest adjustment of `top` that keeps `cursor` inside the window and
+/// the window inside the listing.
+fn visible_top(top: usize, cursor: usize, page: usize, max_top: usize) -> usize {
+    let lower = (cursor + 1).saturating_sub(page);
+    top.clamp(lower, cursor).min(max_top)
+}
+
+/// Scroll the window as little as needed to bring the cursor back into view.
+/// Every path that moves the cursor without a [`Motion`] — a click, the parent
+/// auto-position, a re-listing — ends here, as does a geometry change.
+pub fn clamp_scroll(state: &mut PanelState) {
+    let len = state.entries.len();
+    if len == 0 {
+        state.top_index = 0;
+        return;
+    }
+    let (_, page) = geometry_of(state);
+    let cursor = state.cursor_index.min(len - 1);
+    state.top_index = visible_top(state.top_index, cursor, page, len.saturating_sub(page));
+}
+
+/// Record the panel's rendered layout (SPEC §5.2) and re-clamp the scroll: a
+/// resize or a view-mode change must never leave the cursor off-screen.
+pub fn set_geometry(state: &mut PanelState, columns: u16, rows: u16) {
+    state.geometry.columns = columns;
+    state.geometry.rows_per_column = rows;
+    clamp_scroll(state);
 }
 
 /// Replace a panel's listing: assign path/entries, re-apply the panel's sort,
@@ -62,6 +123,7 @@ pub fn set_listing(state: &mut PanelState, listing: DirListing) {
     state.entries = listing.entries;
     crate::fs::sort_entries(&mut state.entries, state.sort_mode);
     state.cursor_index = 0;
+    state.top_index = 0;
     state.selection.clear();
 }
 
@@ -119,6 +181,7 @@ pub fn resort(state: &mut PanelState) {
 pub fn set_cursor(state: &mut PanelState, index: usize) {
     let len = state.entries.len();
     state.cursor_index = if len == 0 { 0 } else { index.min(len - 1) };
+    clamp_scroll(state);
 }
 
 /// Move the cursor onto the entry with the given name, if present. Used for the
@@ -126,6 +189,7 @@ pub fn set_cursor(state: &mut PanelState, index: usize) {
 pub fn position_on(state: &mut PanelState, name: &str) {
     if let Some(i) = state.entries.iter().position(|e| e.name == name) {
         state.cursor_index = i;
+        clamp_scroll(state);
     }
 }
 
@@ -253,9 +317,9 @@ mod tests {
     }
 
     #[test]
-    fn right_paginates_landing_same_row_leftmost_column() {
-        // page = 6. From rightmost column (col1) row1 = index 4, Right -> next page
-        // leftmost column same row = index 7.
+    fn right_from_rightmost_column_steps_one_column_further() {
+        // page = 6. From rightmost column (col1) row1 = index 4, Right -> index 7,
+        // which the scrolled window renders in the rightmost column, same row.
         let mut p = panel(13, 2, 3);
         p.cursor_index = 4;
         assert_eq!(mv(&mut p, Motion::Right), 7);
@@ -307,6 +371,104 @@ mod tests {
         p.cursor_index = 0;
         assert_eq!(mv(&mut p, Motion::Down), 1);
         assert_eq!(mv(&mut p, Motion::Right), 6); // spans whole list -> last
+    }
+
+    // --- Sliding-window scrolling (§5.2) --------------------------------------
+    // All of these use a 2x3 grid over 13 entries: page = 6, max_top = 7.
+
+    fn scroll(p: &mut PanelState, m: Motion) -> (usize, usize) {
+        move_cursor(p, m);
+        (p.cursor_index, p.top_index)
+    }
+
+    #[test]
+    fn down_at_the_bottom_scrolls_one_entry() {
+        let mut p = panel(13, 2, 3);
+        p.cursor_index = 5; // bottom of the rightmost column, window 0..=5
+        // The window slides by exactly one: entry 3 moves from the top of the
+        // right column to the bottom of the left one, entry 0 scrolls off.
+        assert_eq!(scroll(&mut p, Motion::Down), (6, 1));
+        assert_eq!(scroll(&mut p, Motion::Down), (7, 2));
+    }
+
+    #[test]
+    fn up_at_the_top_scrolls_one_entry_and_otherwise_stays_put() {
+        let mut p = panel(13, 2, 3);
+        p.cursor_index = 6;
+        p.top_index = 1; // window 1..=6
+        // Still inside the window — nothing scrolls.
+        assert_eq!(scroll(&mut p, Motion::Up), (5, 1));
+        p.cursor_index = 1;
+        assert_eq!(scroll(&mut p, Motion::Up), (0, 0)); // off the top edge
+    }
+
+    #[test]
+    fn right_at_the_edge_scrolls_one_column_left_mirrors_it() {
+        let mut p = panel(13, 2, 3);
+        p.cursor_index = 5; // rightmost column, window 0..=5
+        assert_eq!(scroll(&mut p, Motion::Right), (8, 3)); // window 3..=8
+        // Back the same way: index 5 is still visible, so nothing scrolls yet.
+        assert_eq!(scroll(&mut p, Motion::Left), (5, 3));
+        assert_eq!(scroll(&mut p, Motion::Left), (2, 0)); // off the left edge
+    }
+
+    #[test]
+    fn page_motions_scroll_a_full_page_keeping_the_cursor_in_place() {
+        let mut p = panel(13, 2, 3);
+        p.cursor_index = 1;
+        assert_eq!(scroll(&mut p, Motion::PageDown), (7, 6)); // same cell, next page
+        assert_eq!(scroll(&mut p, Motion::PageUp), (1, 0));
+    }
+
+    #[test]
+    fn home_and_end_jump_to_the_first_and_last_window() {
+        let mut p = panel(13, 2, 3);
+        assert_eq!(scroll(&mut p, Motion::End), (12, 7)); // len - page
+        assert_eq!(scroll(&mut p, Motion::Home), (0, 0));
+    }
+
+    #[test]
+    fn a_listing_shorter_than_a_page_never_scrolls() {
+        let mut p = panel(4, 2, 3); // page = 6 > len
+        for m in [Motion::Down, Motion::Right, Motion::PageDown, Motion::End] {
+            move_cursor(&mut p, m);
+            assert_eq!(p.top_index, 0, "{m:?} should not scroll a short listing");
+        }
+    }
+
+    #[test]
+    fn set_cursor_and_set_geometry_pull_the_window_onto_the_cursor() {
+        let mut p = panel(13, 2, 3);
+        set_cursor(&mut p, 12); // a click far below the window
+        assert_eq!(p.top_index, 7);
+        // Shrinking the panel to 2 rows (page = 4) leaves the cursor off-screen
+        // until the geometry change re-clamps the window.
+        set_geometry(&mut p, 2, 2);
+        assert_eq!(p.top_index, 9);
+        assert_eq!(p.cursor_index, 12);
+    }
+
+    #[test]
+    fn set_listing_resets_the_window_and_position_on_scrolls_to_the_entry() {
+        let mut p = panel(13, 2, 3);
+        p.cursor_index = 12;
+        p.top_index = 7;
+        let mut entries: Vec<Entry> = vec![ent("..", EntryKind::Dir)];
+        entries.extend((0..12).map(|i| ent(&i.to_string(), EntryKind::File)));
+        set_listing(
+            &mut p,
+            DirListing {
+                path: "/dir".into(),
+                entries,
+            },
+        );
+        assert_eq!((p.cursor_index, p.top_index), (0, 0));
+        // The "auto-position onto the folder just exited" rule must bring the
+        // window along when that folder sits below the first screen.
+        // (names sort lexicographically, so "9" is the last of "0".."11")
+        position_on(&mut p, "9");
+        assert_eq!(p.cursor_index, 12);
+        assert_eq!(p.top_index, 7);
     }
 
     #[test]
