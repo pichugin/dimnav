@@ -9,14 +9,17 @@ import { commands } from "./bindings";
 import type {
   AppSnapshot,
   ErrorResolution,
+  GotoTarget,
   Motion,
   NavTarget,
   OpenAction,
   OpKind,
   PanelId,
   Resolution,
+  SearchDirection,
   SortMode,
   ViewMode,
+  ViewMotion,
 } from "./bindings";
 
 export { commands, events } from "./bindings";
@@ -46,6 +49,17 @@ export type {
   OpErrorInfo,
   ExecOutput,
   ExecDone,
+  // Embedded viewer / editor (§5.5)
+  OpenOutcome,
+  ViewPage,
+  ViewMotion,
+  ViewerMode,
+  GotoTarget,
+  SearchDirection,
+  EditDoc,
+  SaveOutcome,
+  TextEncoding,
+  Eol,
 } from "./bindings";
 
 /** Result envelope produced by tauri-specta for `Result`-returning commands. */
@@ -121,4 +135,38 @@ export const open = {
   openEntry: (panel: PanelId, action: OpenAction) =>
     unwrap(commands.openEntry(panel, action)),
   cancelExec: () => unwrap(commands.cancelExec()),
+};
+
+/**
+ * Embedded viewer API (F3, §5.5). Every call returns the freshly rendered
+ * {@link ViewPage} — the core holds the open file handle, tracks the byte
+ * position, and does all wrapping, tab expansion, and hex formatting, so the
+ * frontend only ever paints the rows it is given.
+ */
+export const viewer = {
+  setViewport: (id: string, rows: number, cols: number) =>
+    unwrap(commands.viewSetViewport(id, rows, cols)),
+  scroll: (id: string, motion: ViewMotion) => unwrap(commands.viewScroll(id, motion)),
+  toggleHex: (id: string) => unwrap(commands.viewToggleHex(id)),
+  setWrap: (id: string, wrap: boolean) => unwrap(commands.viewSetWrap(id, wrap)),
+  /** `null` means "not found" — a normal outcome, not an error. */
+  search: (id: string, needle: string, direction: SearchDirection) =>
+    unwrap(commands.viewSearch(id, needle, direction)),
+  goto: (id: string, target: GotoTarget) => unwrap(commands.viewGoto(id, target)),
+  /** F6 — hand the same file to the editor; the core supplies the path. */
+  toEdit: (id: string) => unwrap(commands.viewToEdit(id)),
+  close: (id: string) => unwrap(commands.viewClose(id)),
+};
+
+/**
+ * Embedded editor API (F4, §5.5). The core owns the document — encoding, line
+ * endings, permissions, and the file's on-disk identity — while the text widget
+ * here owns the buffer and hands it back whole on save.
+ */
+export const editor = {
+  save: (id: string, text: string, force = false) =>
+    unwrap(commands.editSave(id, text, force)),
+  /** F6 — drop back to the viewer on the same file. */
+  toView: (id: string) => unwrap(commands.editToView(id)),
+  close: (id: string) => unwrap(commands.editClose(id)),
 };

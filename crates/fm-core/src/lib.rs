@@ -21,6 +21,7 @@
 //! - [`open`]   — Open/View/Edit routing: file-type→app decision, execute vs launch (§5.5).
 //! - [`config`] — TOML config load/save; per-panel persistence; trash flag.
 //! - [`plugin`] — extension-point traits (Phase 1: definitions only, no loader).
+//! - [`view`]   — the embedded viewer/editor: type probe, paged sessions, docs (§5.5).
 //! - [`state`]  — the two-panel app navigation state container.
 //! - [`types`]  — the serde + specta DTOs that form the IPC contract surface.
 
@@ -32,3 +33,4 @@ pub mod open;
 pub mod plugin;
 pub mod state;
 pub mod types;
+pub mod view;

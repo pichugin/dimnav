@@ -69,8 +69,25 @@ pub fn save_to(path: &Path, config: &Config) -> Result<(), String> {
 /// (e.g. `Shift+ArrowDown`); for printable keys the shift is already baked into
 /// the character (`*` is `Shift+8` but reports as `"*"`). Remapping, persistence,
 /// and conflict detection are a later slice.
+///
+/// Bindings are scoped by **context** — `"panels"`, `"viewer"`, `"editor"` —
+/// because the same F-key means different things depending on which surface owns
+/// the keyboard (F4 edits the file under the cursor from the panels, and toggles
+/// hex inside the viewer). The frontend consults the context of whichever
+/// surface is on top.
 pub fn default_keymap() -> Vec<KeyBinding> {
     let bind = |action: &str, keys: &[&str]| KeyBinding {
+        context: "panels".to_string(),
+        action: action.to_string(),
+        keys: keys.iter().map(|k| k.to_string()).collect(),
+    };
+    let viewer = |action: &str, keys: &[&str]| KeyBinding {
+        context: "viewer".to_string(),
+        action: action.to_string(),
+        keys: keys.iter().map(|k| k.to_string()).collect(),
+    };
+    let editor = |action: &str, keys: &[&str]| KeyBinding {
+        context: "editor".to_string(),
         action: action.to_string(),
         keys: keys.iter().map(|k| k.to_string()).collect(),
     };
@@ -117,6 +134,31 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         bind("panel.view_2", &["Ctrl+2"]),
         bind("panel.view_3", &["Ctrl+3"]),
         bind("panel.view_detailed", &["Ctrl+4"]),
+        // --- Embedded viewer (§5.5) -----------------------------------------
+        // FAR's assignments, with one deliberate choice: F4 toggles hex (as it
+        // does in FAR's viewer) and F6 does the view↔edit swap, so F4 never
+        // means two things at once.
+        viewer("viewer.close", &["Escape", "F10"]),
+        viewer("viewer.toggle_wrap", &["F2"]),
+        viewer("viewer.toggle_hex", &["F4"]),
+        viewer("viewer.goto", &["F5"]),
+        viewer("viewer.to_edit", &["F6"]),
+        viewer("viewer.search", &["F7"]),
+        viewer("viewer.search_next", &["Shift+F7"]),
+        viewer("viewer.line_up", &["ArrowUp"]),
+        viewer("viewer.line_down", &["ArrowDown"]),
+        viewer("viewer.col_left", &["ArrowLeft"]),
+        viewer("viewer.col_right", &["ArrowRight"]),
+        viewer("viewer.page_up", &["PageUp"]),
+        viewer("viewer.page_down", &["PageDown"]),
+        viewer("viewer.home", &["Home"]),
+        viewer("viewer.end", &["End"]),
+        // --- Embedded editor (§5.5) -----------------------------------------
+        // Everything else in the editor is text entry, so only the commands are
+        // bound; Esc prompts when the buffer is dirty.
+        editor("editor.save", &["F2"]),
+        editor("editor.to_view", &["F6"]),
+        editor("editor.close", &["Escape"]),
     ]
 }
 

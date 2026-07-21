@@ -339,14 +339,189 @@ pub struct ExecDone {
 }
 
 // ---------------------------------------------------------------------------
+// Embedded viewer & editor (§5.5 / §8 Phase 3)
+// ---------------------------------------------------------------------------
+
+/// What kind of content a file holds, decided by sniffing its first bytes
+/// (DOS Navigator's "smart viewer" type detection). Drives which embedded mode
+/// F3/F4 open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Text,
+    Binary,
+    Image,
+}
+
+/// Character encoding of a text file. Detected from a BOM or by sniffing;
+/// remembered so the editor writes back what it read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TextEncoding {
+    #[default]
+    Utf8,
+    /// UTF-8 with a byte-order mark, which must be preserved on save.
+    Utf8Bom,
+    Utf16Le,
+    Utf16Be,
+    Latin1,
+}
+
+/// Line-ending style, detected from the file's first line break and re-applied
+/// on save so editing never rewrites every line of a CRLF file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum Eol {
+    #[default]
+    Lf,
+    Crlf,
+    Cr,
+}
+
+/// Result of sniffing a file's leading bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct FileProbe {
+    pub size: u64,
+    pub media: MediaKind,
+    pub encoding: TextEncoding,
+    pub eol: Eol,
+}
+
+/// Which representation the viewer is currently showing. Text and Hex toggle
+/// (F4); Image is fixed for the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ViewerMode {
+    Text,
+    Hex,
+    Image,
+}
+
+/// One rendered screenful of the viewer. Text and hex modes emit the same shape
+/// — a gutter column plus row strings — so the frontend renders one way and all
+/// formatting stays in the core.
+///
+/// Position is tracked as a **byte offset**, and `percent` is byte-based, so the
+/// viewer never needs a file's total line count and opens a multi-gigabyte log
+/// instantly (FAR behaviour).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ViewPage {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    pub mode: ViewerMode,
+    pub wrap: bool,
+    pub encoding: TextEncoding,
+    /// Line numbers (text) or byte offsets (hex), one per row.
+    pub gutter: Vec<String>,
+    pub rows: Vec<String>,
+    pub top_offset: u64,
+    pub total_bytes: u64,
+    /// Position through the file, 0–100, from `top_offset`.
+    pub percent: u8,
+    /// 1-based logical line at the top of the window, when the index reaches
+    /// that far; `None` in hex mode.
+    pub top_line: Option<u64>,
+    /// Horizontal scroll, in characters, when wrapping is off.
+    pub col_offset: u64,
+    /// Whether the file could be written — drives the status line's read-only
+    /// marker and whether F6 (view → edit) can offer an editable buffer.
+    pub writable: bool,
+}
+
+/// Viewer scroll intents — one offset-advancing state machine, mirroring the
+/// panel cursor's design (§10).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewMotion {
+    LineUp,
+    LineDown,
+    PageUp,
+    PageDown,
+    Home,
+    End,
+    ColLeft,
+    ColRight,
+}
+
+/// Target for the viewer's Goto (F5): a 1-based line, an absolute byte offset,
+/// or a percentage through the file.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum GotoTarget {
+    Line(u64),
+    Offset(u64),
+    Percent(u8),
+}
+
+/// Search direction for F7 / Shift+F7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchDirection {
+    Forward,
+    Backward,
+}
+
+/// An open editor document. The core owns the document (path, encoding, line
+/// endings, permissions, on-disk identity); the frontend owns the editable text
+/// buffer and hands it back whole on save.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct EditDoc {
+    pub id: String,
+    pub path: String,
+    pub name: String,
+    /// Full text, decoded and normalized to `\n` line endings.
+    pub text: String,
+    pub encoding: TextEncoding,
+    pub eol: Eol,
+    /// True when the file is not writable — F2 reports this rather than failing
+    /// at write time.
+    pub read_only: bool,
+}
+
+/// Structured result of an editor save (§5.6 — never an opaque error).
+/// `Conflict` means the file changed on disk since it was opened; the frontend
+/// offers Overwrite (retry with `force`) or Cancel in the red dialog (§5.4b).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SaveOutcome {
+    Saved,
+    Conflict(String),
+    ReadOnly,
+    Failed(String),
+}
+
+/// What `open_entry` actually did — the frontend renders the embedded arms and
+/// ignores the external ones (§5.5).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum OpenOutcome {
+    /// Handed off to an external application; nothing to render.
+    Launched,
+    /// An executable was started; output arrives via the exec events.
+    Executing,
+    /// Nothing to open (`..`, a directory, or an empty panel).
+    Nothing,
+    Viewer(ViewPage),
+    Editor(EditDoc),
+}
+
+// ---------------------------------------------------------------------------
 // Config (persisted, TOML)
 // ---------------------------------------------------------------------------
 
 /// One keybinding: an action id (e.g. `"cursor.down"`) and the key chords bound
 /// to it. Sourced from core config so the webview never hardcodes keys (§6/§7).
 /// Remapping, persistence, and conflict detection are a later slice.
+///
+/// `context` scopes the binding to the surface that owns the keyboard —
+/// `"panels"`, `"viewer"`, or `"editor"` — because the same F-key means
+/// different things in each (F4 edits a file from the panels, toggles hex in the
+/// viewer). The frontend groups the keymap by context and consults the one for
+/// whichever surface is on top.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct KeyBinding {
+    pub context: String,
     pub action: String,
     pub keys: Vec<String>,
 }
@@ -377,21 +552,46 @@ impl Default for PanelPrefs {
     }
 }
 
-/// One file-type → external-application mapping (§5.5 / §7). Associates a set of
-/// extensions with the app to launch for each action; `None` for an action means
-/// "fall back to the system default (`open`)". Matched case-insensitively on the
+/// One file-type → handler mapping (§5.5 / §7). Associates a set of extensions
+/// with what should happen for each action. Matched case-insensitively on the
 /// entry's extension, no leading dot (e.g. `"md"`).
+///
+/// Each value is a handler string, parsed by [`crate::open::Handler`]:
+/// `"internal"` (the embedded viewer/editor), `"system"` (the OS default app),
+/// or an application name (`"Visual Studio Code"`). `None` means "no opinion" —
+/// View/Edit then fall back to `open`, and finally to the built-in default for
+/// the file's detected type.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
 #[serde(default)]
 pub struct FileAssociation {
     /// Lower-case extensions this mapping claims, e.g. `["md", "markdown"]`.
     pub extensions: Vec<String>,
-    /// App for the default Open action (Enter / double-click).
+    /// Handler for the default Open action (Enter / double-click).
     pub open: Option<String>,
-    /// App for View (F3, read-only); falls back to `open` then system default.
+    /// Handler for View (F3, read-only); falls back to `open`.
     pub view: Option<String>,
-    /// App for Edit (F4, read-write); falls back to `open` then system default.
+    /// Handler for Edit (F4, read-write); falls back to `open`.
     pub edit: Option<String>,
+}
+
+/// Embedded-viewer preferences (§7). `wrap` is toggled with F2 in the viewer and
+/// persisted, matching how the panels persist their view state (§5.8).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type)]
+#[serde(default)]
+pub struct ViewerPrefs {
+    pub wrap: bool,
+    pub tab_width: u8,
+    pub hex_bytes_per_row: u8,
+}
+
+impl Default for ViewerPrefs {
+    fn default() -> Self {
+        Self {
+            wrap: false,
+            tab_width: 4,
+            hex_bytes_per_row: 16,
+        }
+    }
 }
 
 /// Root config document (serialized to TOML). Ships with working defaults — the
@@ -410,8 +610,13 @@ pub struct Config {
     pub trash_default: bool,
     /// Id of the active theme.
     pub theme: String,
+    /// Largest file the embedded editor will load. Above this, F4 hands off to
+    /// the external editor — the editor holds the whole document in memory,
+    /// unlike the viewer, which pages.
+    pub edit_max_bytes: u64,
     pub left_panel: PanelPrefs,
     pub right_panel: PanelPrefs,
+    pub viewer: ViewerPrefs,
     /// File-type → external-application map (§5.5). Empty by default, so every
     /// file opens with the system default until the user edits the TOML.
     pub associations: Vec<FileAssociation>,
@@ -422,8 +627,10 @@ impl Default for Config {
         Self {
             trash_default: false,
             theme: "classic".to_string(),
+            edit_max_bytes: 16 << 20, // 16 MiB
             left_panel: PanelPrefs::default(),
             right_panel: PanelPrefs::default(),
+            viewer: ViewerPrefs::default(),
             associations: Vec::new(),
         }
     }

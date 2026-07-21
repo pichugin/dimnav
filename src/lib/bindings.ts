@@ -125,15 +125,80 @@ export const commands = {
 	/**  Request cancellation of a running op; the engine stops between items (§5.4a). */
 	cancelOp: (opId: string) => typedError<null, string>(__TAURI_INVOKE("cancel_op", { opId })),
 	/**
-	 *  Open the entry under `panel`'s cursor with an external tool. `Open` (Enter)
-	 *  uses the system default and *runs* executables; `View` (F3) / `Edit` (F4) route
-	 *  to the configured viewer/editor for the file type, falling back to the system
-	 *  default. The core (`fm_core::open::plan_open`) makes the launch-vs-execute and
-	 *  which-app decision; this handler only performs the OS side-effect (SPEC §3).
+	 *  Open the entry under `panel`'s cursor. `Open` (Enter) uses the system default
+	 *  and *runs* executables; `View` (F3) / `Edit` (F4) route to the embedded viewer
+	 *  or editor, or to a configured external tool (§5.5).
+	 * 
+	 *  The core (`fm_core::open::plan_open`) sniffs the file and makes the whole
+	 *  decision; this handler only performs the side-effect it asks for and returns
+	 *  whatever the frontend needs to render (SPEC §3).
 	 */
-	openEntry: (panel: PanelId, action: OpenAction) => typedError<null, string>(__TAURI_INVOKE("open_entry", { panel, action })),
+	openEntry: (panel: PanelId, action: OpenAction) => typedError<OpenOutcome, string>(__TAURI_INVOKE("open_entry", { panel, action })),
 	/**  Kill the executable currently running in the output modal, if any (§5.5). */
 	cancelExec: () => typedError<null, string>(__TAURI_INVOKE("cancel_exec")),
+	/**
+	 *  Report the viewer's visible geometry in rows and characters, the same way the
+	 *  panels report theirs: the frontend owns pixels, the core owns what they mean.
+	 */
+	viewSetViewport: (id: string, rows: number, cols: number) => typedError<ViewPage, string>(__TAURI_INVOKE("view_set_viewport", { id, rows, cols })),
+	viewScroll: (id: string, motion: ViewMotion) => typedError<ViewPage, string>(__TAURI_INVOKE("view_scroll", { id, motion })),
+	/**  Toggle between text and hex (F4), keeping the byte position. */
+	viewToggleHex: (id: string) => typedError<ViewPage, string>(__TAURI_INVOKE("view_toggle_hex", { id })),
+	/**
+	 *  Toggle word wrap (F2) and persist it, the way the panels persist their view
+	 *  state (§5.8).
+	 */
+	viewSetWrap: (id: string, wrap: boolean) => typedError<ViewPage, string>(__TAURI_INVOKE("view_set_wrap", { id, wrap })),
+	/**
+	 *  Search from just past the current position (F7 / Shift+F7). `Ok(None)` means
+	 *  "not found" — a normal outcome the frontend reports in the status line,
+	 *  rather than an error dialog.
+	 */
+	viewSearch: (id: string, needle: string, direction: SearchDirection) => typedError<{
+	id: string,
+	path: string,
+	name: string,
+	mode: ViewerMode,
+	wrap: boolean,
+	encoding: TextEncoding,
+	/**  Line numbers (text) or byte offsets (hex), one per row. */
+	gutter: string[],
+	rows: string[],
+	top_offset: number,
+	total_bytes: number,
+	/**  Position through the file, 0–100, from `top_offset`. */
+	percent: number,
+	/**
+	 *  1-based logical line at the top of the window, when the index reaches
+	 *  that far; `None` in hex mode.
+	 */
+	top_line: number | null,
+	/**  Horizontal scroll, in characters, when wrapping is off. */
+	col_offset: number,
+	/**
+	 *  Whether the file could be written — drives the status line's read-only
+	 *  marker and whether F6 (view → edit) can offer an editable buffer.
+	 */
+	writable: boolean,
+} | null, string>(__TAURI_INVOKE("view_search", { id, needle, direction })),
+	/**  Jump to a line, byte offset, or percentage through the file (F5). */
+	viewGoto: (id: string, target: GotoTarget) => typedError<ViewPage, string>(__TAURI_INVOKE("view_goto", { id, target })),
+	/**
+	 *  Hand the file open in the viewer to the editor (F6). The path comes from the
+	 *  session rather than the frontend, so the webview never names the file it
+	 *  wants opened for writing.
+	 */
+	viewToEdit: (id: string) => typedError<EditDoc, string>(__TAURI_INVOKE("view_to_edit", { id })),
+	viewClose: (id: string) => typedError<null, string>(__TAURI_INVOKE("view_close", { id })),
+	/**
+	 *  Write the buffer back (F2). `force` answers a previous `Conflict` outcome
+	 *  with "overwrite anyway". The outcome is structured, never a thrown error
+	 *  (§5.6).
+	 */
+	editSave: (id: string, text: string, force: boolean) => typedError<SaveOutcome, string>(__TAURI_INVOKE("edit_save", { id, text, force })),
+	/**  Drop back from the editor to the viewer on the same file (F6). */
+	editToView: (id: string) => typedError<ViewPage, string>(__TAURI_INVOKE("edit_to_view", { id })),
+	editClose: (id: string) => typedError<null, string>(__TAURI_INVOKE("edit_close", { id })),
 };
 
 /** Events */
@@ -191,8 +256,15 @@ export type Config = {
 	trash_default?: boolean,
 	/**  Id of the active theme. */
 	theme?: string,
+	/**
+	 *  Largest file the embedded editor will load. Above this, F4 hands off to
+	 *  the external editor — the editor holds the whole document in memory,
+	 *  unlike the viewer, which pages.
+	 */
+	edit_max_bytes?: number,
 	left_panel?: PanelPrefs,
 	right_panel?: PanelPrefs,
+	viewer?: ViewerPrefs,
 	/**
 	 *  File-type → external-application map (§5.5). Empty by default, so every
 	 *  file opens with the system default until the user edits the TOML.
@@ -210,6 +282,26 @@ export type ConfigChangedEvent = null;
 export type DirListing = {
 	path: string,
 	entries: Entry[],
+};
+
+/**
+ *  An open editor document. The core owns the document (path, encoding, line
+ *  endings, permissions, on-disk identity); the frontend owns the editable text
+ *  buffer and hands it back whole on save.
+ */
+export type EditDoc = {
+	id: string,
+	path: string,
+	name: string,
+	/**  Full text, decoded and normalized to `\n` line endings. */
+	text: string,
+	encoding: TextEncoding,
+	eol: Eol,
+	/**
+	 *  True when the file is not writable — F2 reports this rather than failing
+	 *  at write time.
+	 */
+	read_only: boolean,
 };
 
 /**  One row in a directory listing. */
@@ -235,6 +327,12 @@ export type EntryKind = "file" | "dir" | "symlink" | "special";
  *  than failing the whole listing (§5.6).
  */
 export type EntryMarker = "ok" | "denied" | "broken";
+
+/**
+ *  Line-ending style, detected from the file's first line break and re-applied
+ *  on save so editing never rewrites every line of a CRLF file.
+ */
+export type Eol = "lf" | "crlf" | "cr";
 
 /**
  *  Error-dialog resolution. Adds `Retry` and `Elevate`; elevation routes through
@@ -271,28 +369,46 @@ export type ExecOutput = {
 export type ExecOutputEvent = ExecOutput;
 
 /**
- *  One file-type → external-application mapping (§5.5 / §7). Associates a set of
- *  extensions with the app to launch for each action; `None` for an action means
- *  "fall back to the system default (`open`)". Matched case-insensitively on the
+ *  One file-type → handler mapping (§5.5 / §7). Associates a set of extensions
+ *  with what should happen for each action. Matched case-insensitively on the
  *  entry's extension, no leading dot (e.g. `"md"`).
+ * 
+ *  Each value is a handler string, parsed by [`crate::open::Handler`]:
+ *  `"internal"` (the embedded viewer/editor), `"system"` (the OS default app),
+ *  or an application name (`"Visual Studio Code"`). `None` means "no opinion" —
+ *  View/Edit then fall back to `open`, and finally to the built-in default for
+ *  the file's detected type.
  */
 export type FileAssociation = {
 	/**  Lower-case extensions this mapping claims, e.g. `["md", "markdown"]`. */
 	extensions?: string[],
-	/**  App for the default Open action (Enter / double-click). */
+	/**  Handler for the default Open action (Enter / double-click). */
 	open?: string | null,
-	/**  App for View (F3, read-only); falls back to `open` then system default. */
+	/**  Handler for View (F3, read-only); falls back to `open`. */
 	view?: string | null,
-	/**  App for Edit (F4, read-write); falls back to `open` then system default. */
+	/**  Handler for Edit (F4, read-write); falls back to `open`. */
 	edit?: string | null,
 };
+
+/**
+ *  Target for the viewer's Goto (F5): a 1-based line, an absolute byte offset,
+ *  or a percentage through the file.
+ */
+export type GotoTarget = { kind: "line"; value: number } | { kind: "offset"; value: number } | { kind: "percent"; value: number };
 
 /**
  *  One keybinding: an action id (e.g. `"cursor.down"`) and the key chords bound
  *  to it. Sourced from core config so the webview never hardcodes keys (§6/§7).
  *  Remapping, persistence, and conflict detection are a later slice.
+ * 
+ *  `context` scopes the binding to the surface that owns the keyboard —
+ *  `"panels"`, `"viewer"`, or `"editor"` — because the same F-key means
+ *  different things in each (F4 edits a file from the panels, toggles hex in the
+ *  viewer). The frontend groups the keymap by context and consults the one for
+ *  whichever surface is on top.
  */
 export type KeyBinding = {
+	context: string,
 	action: string,
 	keys: string[],
 };
@@ -369,6 +485,18 @@ export type OpStatus = "pending" | "success" | "partial" | "failed" | "cancelled
 export type OpenAction = "open" | "view" | "edit";
 
 /**
+ *  What `open_entry` actually did — the frontend renders the embedded arms and
+ *  ignores the external ones (§5.5).
+ */
+export type OpenOutcome = 
+/**  Handed off to an external application; nothing to render. */
+{ kind: "launched" } | 
+/**  An executable was started; output arrives via the exec events. */
+{ kind: "executing" } | 
+/**  Nothing to open (`..`, a directory, or an empty panel). */
+{ kind: "nothing" } | { kind: "viewer"; value: ViewPage } | { kind: "editor"; value: EditDoc };
+
+/**
  *  Payload for a panel-state change pushed by the core, e.g. the directory
  *  changed underneath us and was refreshed (§5.6).
  */
@@ -434,14 +562,91 @@ export type PanelState = {
  */
 export type Resolution = "skip" | "skip_all" | "overwrite" | "overwrite_all" | "cancel";
 
+/**
+ *  Structured result of an editor save (§5.6 — never an opaque error).
+ *  `Conflict` means the file changed on disk since it was opened; the frontend
+ *  offers Overwrite (retry with `force`) or Cancel in the red dialog (§5.4b).
+ */
+export type SaveOutcome = { kind: "saved" } | { kind: "conflict"; value: string } | { kind: "read_only" } | { kind: "failed"; value: string };
+
+/**  Search direction for F7 / Shift+F7. */
+export type SearchDirection = "forward" | "backward";
+
 /**  Sort order. Folders-first-by-name is the default (§5.8). */
 export type SortMode = "name_folders_first" | "type_name" | "size" | "date";
+
+/**
+ *  Character encoding of a text file. Detected from a BOM or by sniffing;
+ *  remembered so the editor writes back what it read.
+ */
+export type TextEncoding = "utf8" | 
+/**  UTF-8 with a byte-order mark, which must be preserved on save. */
+"utf8_bom" | "utf16_le" | "utf16_be" | "latin1";
 
 /**
  *  Per-panel view mode. `Columns(n)` covers the brief multi-column modes
  *  (2 by default); `Detailed` is the single-column-with-metadata mode (§5.2).
  */
 export type ViewMode = { kind: "columns"; columns: number } | { kind: "detailed" };
+
+/**
+ *  Viewer scroll intents — one offset-advancing state machine, mirroring the
+ *  panel cursor's design (§10).
+ */
+export type ViewMotion = "line_up" | "line_down" | "page_up" | "page_down" | "home" | "end" | "col_left" | "col_right";
+
+/**
+ *  One rendered screenful of the viewer. Text and hex modes emit the same shape
+ *  — a gutter column plus row strings — so the frontend renders one way and all
+ *  formatting stays in the core.
+ * 
+ *  Position is tracked as a **byte offset**, and `percent` is byte-based, so the
+ *  viewer never needs a file's total line count and opens a multi-gigabyte log
+ *  instantly (FAR behaviour).
+ */
+export type ViewPage = {
+	id: string,
+	path: string,
+	name: string,
+	mode: ViewerMode,
+	wrap: boolean,
+	encoding: TextEncoding,
+	/**  Line numbers (text) or byte offsets (hex), one per row. */
+	gutter: string[],
+	rows: string[],
+	top_offset: number,
+	total_bytes: number,
+	/**  Position through the file, 0–100, from `top_offset`. */
+	percent: number,
+	/**
+	 *  1-based logical line at the top of the window, when the index reaches
+	 *  that far; `None` in hex mode.
+	 */
+	top_line: number | null,
+	/**  Horizontal scroll, in characters, when wrapping is off. */
+	col_offset: number,
+	/**
+	 *  Whether the file could be written — drives the status line's read-only
+	 *  marker and whether F6 (view → edit) can offer an editable buffer.
+	 */
+	writable: boolean,
+};
+
+/**
+ *  Which representation the viewer is currently showing. Text and Hex toggle
+ *  (F4); Image is fixed for the session.
+ */
+export type ViewerMode = "text" | "hex" | "image";
+
+/**
+ *  Embedded-viewer preferences (§7). `wrap` is toggled with F2 in the viewer and
+ *  persisted, matching how the panels persist their view state (§5.8).
+ */
+export type ViewerPrefs = {
+	wrap?: boolean,
+	tab_width?: number,
+	hex_bytes_per_row?: number,
+};
 
 /* Tauri Specta runtime */
 async function typedError<T, E>(result: Promise<T>): Promise<{ status: "ok"; data: T } | { status: "error"; error: E }> {

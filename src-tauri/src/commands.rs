@@ -12,12 +12,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use fm_core::open::OpenPlan;
+use fm_core::open::{EmbeddedMode, OpenPlan};
 use fm_core::state::AppState;
 use fm_core::types::{
-    AppSnapshot, Config, DeleteRequest, DirListing, EntryKind, ErrorResolution, KeyBinding, Motion,
-    NavTarget, OpKind, OpenAction, OpRequest, PanelId, Resolution, SortMode, ViewMode,
+    AppSnapshot, Config, DeleteRequest, DirListing, EditDoc, EntryKind, ErrorResolution, GotoTarget,
+    KeyBinding, MediaKind, Motion, NavTarget, OpKind, OpenAction, OpenOutcome, OpRequest, PanelId,
+    Resolution, SaveOutcome, SearchDirection, SortMode, ViewMode, ViewMotion, ViewPage, ViewerMode,
 };
+use fm_core::view::{edit::Docs, Sessions};
 use tauri::{AppHandle, State};
 use tauri_specta::Event;
 
@@ -27,6 +29,15 @@ use crate::ops_runtime::{registry, OpRegistry, TauriObserver, UserInput};
 
 /// Tauri-managed shared navigation state.
 pub type SharedState = Mutex<AppState>;
+
+/// Tauri-managed embedded-viewer sessions and editor documents. Both registries
+/// live in `fm-core`; the adapter only owns the lock around them.
+pub type ViewState = Mutex<Sessions>;
+pub type EditState = Mutex<Docs>;
+
+fn view_lock<T>(_: PoisonError<T>) -> String {
+    "viewer state lock was poisoned".to_string()
+}
 
 fn lock_err<T>(_: PoisonError<T>) -> String {
     "navigation state lock was poisoned".to_string()
@@ -666,20 +677,24 @@ pub fn cancel_op(registry_state: State<'_, OpRegistry>, op_id: String) -> Result
 
 // --- Open / View / Edit (§5.5) ----------------------------------------------
 
-/// Open the entry under `panel`'s cursor with an external tool. `Open` (Enter)
-/// uses the system default and *runs* executables; `View` (F3) / `Edit` (F4) route
-/// to the configured viewer/editor for the file type, falling back to the system
-/// default. The core (`fm_core::open::plan_open`) makes the launch-vs-execute and
-/// which-app decision; this handler only performs the OS side-effect (SPEC §3).
+/// Open the entry under `panel`'s cursor. `Open` (Enter) uses the system default
+/// and *runs* executables; `View` (F3) / `Edit` (F4) route to the embedded viewer
+/// or editor, or to a configured external tool (§5.5).
+///
+/// The core (`fm_core::open::plan_open`) sniffs the file and makes the whole
+/// decision; this handler only performs the side-effect it asks for and returns
+/// whatever the frontend needs to render (SPEC §3).
 #[tauri::command]
 #[specta::specta]
 pub fn open_entry(
     app: AppHandle,
     state: State<'_, SharedState>,
     exec_state: State<'_, ExecState>,
+    view_state: State<'_, ViewState>,
+    edit_state: State<'_, EditState>,
     panel: PanelId,
     action: OpenAction,
-) -> Result<(), String> {
+) -> Result<OpenOutcome, String> {
     let (entry, cwd, config) = {
         let s = state.lock().map_err(lock_err)?;
         let p = s.panel(panel);
@@ -690,17 +705,215 @@ pub fn open_entry(
         )
     };
     let Some(entry) = entry else {
-        return Ok(()); // empty panel — nothing under the cursor
+        return Ok(OpenOutcome::Nothing); // empty panel — nothing under the cursor
     };
 
-    let Some(plan) = fm_core::open::plan_open(&entry, action, &cwd, &config) else {
-        return Ok(()); // `..` or a directory — navigation handles those, not opening
+    let (plan, probe) = fm_core::open::plan_open(&entry, action, &cwd, &config);
+    let Some(plan) = plan else {
+        // `..` or a directory — navigation handles those, not opening.
+        return Ok(OpenOutcome::Nothing);
     };
 
     match plan {
-        OpenPlan::Launch { path, app: with_app } => launch(&path, with_app.as_deref()),
-        OpenPlan::Execute { path, cwd } => exec_runtime::spawn_exec(app, &exec_state, path, cwd),
+        OpenPlan::Launch { path, app: with_app } => {
+            launch(&path, with_app.as_deref())?;
+            Ok(OpenOutcome::Launched)
+        }
+        OpenPlan::Execute { path, cwd } => {
+            exec_runtime::spawn_exec(app, &exec_state, path, cwd)?;
+            Ok(OpenOutcome::Executing)
+        }
+        OpenPlan::Embedded { path, mode } => {
+            // Routing only reaches an embedded plan by way of a successful
+            // probe, so the type is known here.
+            let probe = probe.ok_or_else(|| format!("could not read {path}"))?;
+            match mode {
+                EmbeddedMode::Edit => {
+                    let mut docs = edit_state.lock().map_err(view_lock)?;
+                    Ok(OpenOutcome::Editor(docs.open(
+                        &path,
+                        probe,
+                        config.edit_max_bytes,
+                    )?))
+                }
+                EmbeddedMode::Text | EmbeddedMode::Hex | EmbeddedMode::Image => {
+                    let viewer_mode = match mode {
+                        EmbeddedMode::Hex => ViewerMode::Hex,
+                        EmbeddedMode::Image => ViewerMode::Image,
+                        _ => ViewerMode::Text,
+                    };
+                    let mut sessions = view_state.lock().map_err(view_lock)?;
+                    let id = sessions.open(&path, probe, viewer_mode, &config.viewer)?;
+                    Ok(OpenOutcome::Viewer(sessions.page(&id)?))
+                }
+            }
+        }
     }
+}
+
+// --- Embedded viewer (§5.5) --------------------------------------------------
+
+/// Report the viewer's visible geometry in rows and characters, the same way the
+/// panels report theirs: the frontend owns pixels, the core owns what they mean.
+#[tauri::command]
+#[specta::specta]
+pub fn view_set_viewport(
+    view_state: State<'_, ViewState>,
+    id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<ViewPage, String> {
+    view_state
+        .lock()
+        .map_err(view_lock)?
+        .set_viewport(&id, rows, cols)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn view_scroll(
+    view_state: State<'_, ViewState>,
+    id: String,
+    motion: ViewMotion,
+) -> Result<ViewPage, String> {
+    view_state.lock().map_err(view_lock)?.scroll(&id, motion)
+}
+
+/// Toggle between text and hex (F4), keeping the byte position.
+#[tauri::command]
+#[specta::specta]
+pub fn view_toggle_hex(view_state: State<'_, ViewState>, id: String) -> Result<ViewPage, String> {
+    view_state.lock().map_err(view_lock)?.toggle_mode(&id)
+}
+
+/// Toggle word wrap (F2) and persist it, the way the panels persist their view
+/// state (§5.8).
+#[tauri::command]
+#[specta::specta]
+pub fn view_set_wrap(
+    state: State<'_, SharedState>,
+    view_state: State<'_, ViewState>,
+    id: String,
+    wrap: bool,
+) -> Result<ViewPage, String> {
+    {
+        let mut s = state.lock().map_err(lock_err)?;
+        s.config.viewer.wrap = wrap;
+        fm_core::config::save(&s.config);
+    }
+    view_state.lock().map_err(view_lock)?.set_wrap(&id, wrap)
+}
+
+/// Search from just past the current position (F7 / Shift+F7). `Ok(None)` means
+/// "not found" — a normal outcome the frontend reports in the status line,
+/// rather than an error dialog.
+#[tauri::command]
+#[specta::specta]
+pub fn view_search(
+    view_state: State<'_, ViewState>,
+    id: String,
+    needle: String,
+    direction: SearchDirection,
+) -> Result<Option<ViewPage>, String> {
+    view_state
+        .lock()
+        .map_err(view_lock)?
+        .search(&id, &needle, direction)
+}
+
+/// Jump to a line, byte offset, or percentage through the file (F5).
+#[tauri::command]
+#[specta::specta]
+pub fn view_goto(
+    view_state: State<'_, ViewState>,
+    id: String,
+    target: GotoTarget,
+) -> Result<ViewPage, String> {
+    view_state.lock().map_err(view_lock)?.goto(&id, target)
+}
+
+/// Hand the file open in the viewer to the editor (F6). The path comes from the
+/// session rather than the frontend, so the webview never names the file it
+/// wants opened for writing.
+#[tauri::command]
+#[specta::specta]
+pub fn view_to_edit(
+    state: State<'_, SharedState>,
+    view_state: State<'_, ViewState>,
+    edit_state: State<'_, EditState>,
+    id: String,
+) -> Result<EditDoc, String> {
+    let path = view_state
+        .lock()
+        .map_err(view_lock)?
+        .path_of(&id)
+        .ok_or_else(|| format!("viewer session {id} is no longer open"))?;
+    let max_bytes = state.lock().map_err(lock_err)?.config.edit_max_bytes;
+    let probe = fm_core::view::probe::probe(Path::new(&path))?;
+    // The editor is a text editor: decoding a binary into it and saving would
+    // corrupt the file, so F6 refuses rather than offering a lossy buffer.
+    if probe.media != MediaKind::Text {
+        return Err("only text files can be edited".to_string());
+    }
+    let doc = edit_state
+        .lock()
+        .map_err(view_lock)?
+        .open(&path, probe, max_bytes)?;
+    view_state.lock().map_err(view_lock)?.close(&id);
+    Ok(doc)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn view_close(view_state: State<'_, ViewState>, id: String) -> Result<(), String> {
+    view_state.lock().map_err(view_lock)?.close(&id);
+    Ok(())
+}
+
+// --- Embedded editor (§5.5) --------------------------------------------------
+
+/// Write the buffer back (F2). `force` answers a previous `Conflict` outcome
+/// with "overwrite anyway". The outcome is structured, never a thrown error
+/// (§5.6).
+#[tauri::command]
+#[specta::specta]
+pub fn edit_save(
+    edit_state: State<'_, EditState>,
+    id: String,
+    text: String,
+    force: bool,
+) -> Result<SaveOutcome, String> {
+    Ok(edit_state.lock().map_err(view_lock)?.save(&id, &text, force))
+}
+
+/// Drop back from the editor to the viewer on the same file (F6).
+#[tauri::command]
+#[specta::specta]
+pub fn edit_to_view(
+    state: State<'_, SharedState>,
+    view_state: State<'_, ViewState>,
+    edit_state: State<'_, EditState>,
+    id: String,
+) -> Result<ViewPage, String> {
+    let path = edit_state
+        .lock()
+        .map_err(view_lock)?
+        .path_of(&id)
+        .ok_or_else(|| format!("editor session {id} is no longer open"))?;
+    let viewer_prefs = state.lock().map_err(lock_err)?.config.viewer;
+    let probe = fm_core::view::probe::probe(Path::new(&path))?;
+    let mut sessions = view_state.lock().map_err(view_lock)?;
+    let view_id = sessions.open(&path, probe, ViewerMode::Text, &viewer_prefs)?;
+    let page = sessions.page(&view_id)?;
+    edit_state.lock().map_err(view_lock)?.close(&id);
+    Ok(page)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn edit_close(edit_state: State<'_, EditState>, id: String) -> Result<(), String> {
+    edit_state.lock().map_err(view_lock)?.close(&id);
+    Ok(())
 }
 
 /// Kill the executable currently running in the output modal, if any (§5.5).

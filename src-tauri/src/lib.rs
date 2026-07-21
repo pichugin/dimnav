@@ -45,6 +45,18 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::cancel_op,
             commands::open_entry,
             commands::cancel_exec,
+            // Embedded viewer / editor (§5.5).
+            commands::view_set_viewport,
+            commands::view_scroll,
+            commands::view_toggle_hex,
+            commands::view_set_wrap,
+            commands::view_search,
+            commands::view_goto,
+            commands::view_to_edit,
+            commands::view_close,
+            commands::edit_save,
+            commands::edit_to_view,
+            commands::edit_close,
         ])
         .events(collect_events![
             events::OpProgressEvent,
@@ -96,6 +108,10 @@ pub fn run() {
         // The single running executable (Enter-on-executable), so `cancel_exec`
         // can kill it (§5.5).
         .manage(exec_runtime::ExecState::default())
+        // Open viewer sessions and editor documents. Both registries are
+        // `fm-core` types; the adapter owns nothing but the lock (§5.5).
+        .manage(commands::ViewState::default())
+        .manage(commands::EditState::default())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);

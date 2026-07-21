@@ -1,19 +1,27 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { nav, ops, open, events } from "./lib/ipc";
+  import { nav, ops, open, viewer, editor, events } from "./lib/ipc";
   import type {
     AppSnapshot,
+    EditDoc,
     Entry,
     ErrorResolution,
+    GotoTarget,
     KeyBinding,
     Motion,
     OpKind,
+    OpenOutcome,
     PanelId,
     PanelState,
     Resolution,
+    SearchDirection,
     SortMode,
     ViewMode,
+    ViewMotion,
+    ViewPage,
   } from "./lib/ipc";
+  import Viewer from "./lib/Viewer.svelte";
+  import Editor from "./lib/Editor.svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
   // Row height in px — single source of truth shared by the grid layout and the
@@ -68,15 +76,41 @@
   // A single-field text prompt reused for Create Directory (F7) and Rename
   // (Shift+F6). `error` holds an inline message (e.g. name collision) so the
   // prompt can stay open for the user to retype.
-  type TextPrompt = { kind: "mkdir" | "rename"; value: string; error?: string };
+  type TextPrompt = {
+    kind: "mkdir" | "rename" | "search" | "goto";
+    value: string;
+    error?: string;
+  };
   let textPrompt = $state<TextPrompt | null>(null);
   // The output modal for a running executable (Enter-on-executable, §5.5). Opens
   // lazily when the first exec event arrives; the Phase-2 terminal replaces it.
   type ExecView = { lines: string[]; done: boolean; code: number };
   let execView = $state<ExecView | null>(null);
 
-  // chord string -> action id, built from the core-provided keymap.
-  let keymapByChord: Record<string, string> = {};
+  // --- Embedded viewer / editor (§5.5) --------------------------------------
+  // Only one of these is ever open, and it covers the panels like FAR's viewer.
+  let viewerPage = $state<ViewPage | null>(null);
+  let editorDoc = $state<EditDoc | null>(null);
+  // The buffer being typed into; `saved` is the last text the core wrote, so
+  // "modified" is a comparison rather than a flag that can drift.
+  let editorText = $state("");
+  let editorSaved = $state("");
+  const editorDirty = $derived(editorText !== editorSaved);
+  // Transient status text for whichever overlay is open (search misses, save
+  // results), cleared on the next action.
+  let overlayMessage = $state("");
+  // The last search, so Shift+F7 can repeat it without re-prompting.
+  let lastSearch = $state("");
+  // A save that hit a conflict, awaiting the user's Overwrite/Cancel answer.
+  let saveConflict = $state<string | null>(null);
+  // Esc on a modified buffer, awaiting Save / Discard / Cancel.
+  let unsavedPrompt = $state(false);
+
+  // Which keymap context owns the keyboard right now (§6).
+  const keyContext = $derived(editorDoc ? "editor" : viewerPage ? "viewer" : "panels");
+
+  // context -> chord string -> action id, built from the core-provided keymap.
+  let keymaps: Record<string, Record<string, string>> = {};
   const listingEls: Record<PanelId, HTMLElement | null> = { left: null, right: null };
 
   // Canonical chord for a KeyboardEvent: modifiers in a fixed order, then the
@@ -165,11 +199,27 @@
     return p.selection.reduce((sum, i) => sum + (p.entries[i]?.size ?? 0), 0);
   }
 
-  function buildKeymap(bindings: KeyBinding[]): Record<string, string> {
-    const map: Record<string, string> = {};
-    for (const b of bindings) for (const k of b.keys) map[k] = b.action;
+  function buildKeymap(bindings: KeyBinding[]): Record<string, Record<string, string>> {
+    const map: Record<string, Record<string, string>> = {};
+    for (const b of bindings) {
+      const ctx = (map[b.context] ??= {});
+      for (const k of b.keys) ctx[k] = b.action;
+    }
     return map;
   }
+
+  const PROMPT_TITLES: Record<TextPrompt["kind"], string> = {
+    mkdir: "Create directory:",
+    rename: "Rename to:",
+    search: "Search for:",
+    goto: "Go to line, 0x offset, or percent:",
+  };
+  const PROMPT_ACTIONS: Record<TextPrompt["kind"], string> = {
+    mkdir: "Create",
+    rename: "Rename",
+    search: "Search",
+    goto: "Go",
+  };
 
   // Svelte action: focus (and select) a text input as soon as it mounts.
   function autofocus(node: HTMLInputElement) {
@@ -387,6 +437,22 @@
   async function confirmText() {
     if (!textPrompt) return;
     const { kind, value } = textPrompt;
+    // Viewer prompts act on the open session rather than the panels.
+    if (kind === "search") {
+      textPrompt = null;
+      await runSearch(value.trim(), "forward");
+      return;
+    }
+    if (kind === "goto") {
+      const target = parseGoto(value);
+      if (!target) {
+        textPrompt = { kind, value, error: "Enter a line, 0x offset, or percentage" };
+        return;
+      }
+      textPrompt = null;
+      if (viewerPage) await viewerDo(() => viewer.goto(viewerPage!.id, target));
+      return;
+    }
     try {
       snapshot =
         kind === "mkdir"
@@ -453,6 +519,228 @@
     }
   }
 
+  // --- Embedded viewer / editor (§5.5) --------------------------------------
+
+  // Route what `open_entry` decided into the right surface. External launches
+  // and executable runs need nothing here — the core already did them.
+  function receiveOpen(outcome: OpenOutcome) {
+    overlayMessage = "";
+    if (outcome.kind === "viewer") {
+      viewerPage = outcome.value;
+      editorDoc = null;
+    } else if (outcome.kind === "editor") {
+      openEditor(outcome.value);
+    }
+  }
+
+  function openEditor(doc: EditDoc) {
+    editorDoc = doc;
+    editorText = doc.text;
+    editorSaved = doc.text;
+    viewerPage = null;
+    saveConflict = null;
+  }
+
+  // Every viewer command returns the freshly rendered page, so the whole
+  // frontend job is to hand the result back to the renderer.
+  async function viewerDo(fn: () => Promise<ViewPage>) {
+    try {
+      overlayMessage = "";
+      viewerPage = await fn();
+    } catch (err) {
+      overlayMessage = errMessage(err);
+    }
+  }
+
+  async function runSearch(needle: string, direction: SearchDirection) {
+    if (!viewerPage || !needle) return;
+    lastSearch = needle;
+    try {
+      const page = await viewer.search(viewerPage.id, needle, direction);
+      // `null` is "not found" — a status-line message, not an error dialog.
+      if (page) {
+        viewerPage = page;
+        overlayMessage = "";
+      } else {
+        overlayMessage = `"${needle}" not found`;
+      }
+    } catch (err) {
+      overlayMessage = errMessage(err);
+    }
+  }
+
+  // Parse the Goto (F5) input the way FAR does: a bare number is a line, a `%`
+  // suffix a percentage, and a `0x`/`$` prefix a byte offset.
+  function parseGoto(input: string): GotoTarget | null {
+    const text = input.trim();
+    if (!text) return null;
+    if (text.endsWith("%")) {
+      const pct = Number(text.slice(0, -1));
+      return Number.isFinite(pct) ? { kind: "percent", value: Math.max(0, Math.min(100, pct)) } : null;
+    }
+    if (/^(0x|\$)/i.test(text)) {
+      const offset = Number.parseInt(text.replace(/^\$/, "0x"), 16);
+      return Number.isFinite(offset) ? { kind: "offset", value: offset } : null;
+    }
+    const line = Number(text);
+    return Number.isFinite(line) && line > 0 ? { kind: "line", value: Math.floor(line) } : null;
+  }
+
+  async function closeViewer() {
+    const page = viewerPage;
+    viewerPage = null;
+    overlayMessage = "";
+    if (page) await viewer.close(page.id).catch(() => {});
+
+  }
+
+  // F6 in the viewer: the core hands the same file to the editor, so the
+  // frontend never names a file it wants opened for writing.
+  async function viewerToEdit() {
+    if (!viewerPage) return;
+    try {
+      openEditor(await viewer.toEdit(viewerPage.id));
+    } catch (err) {
+      overlayMessage = errMessage(err);
+    }
+  }
+
+  async function saveEditor(force = false) {
+    if (!editorDoc) return;
+    try {
+      const outcome = await editor.save(editorDoc.id, editorText, force);
+      if (outcome.kind === "saved") {
+        editorSaved = editorText;
+        saveConflict = null;
+        overlayMessage = "Saved";
+        await refreshBoth();
+      } else if (outcome.kind === "conflict") {
+        saveConflict = outcome.value;
+      } else if (outcome.kind === "read_only") {
+        overlayMessage = "This file is read-only";
+      } else {
+        overlayMessage = outcome.value;
+      }
+    } catch (err) {
+      overlayMessage = errMessage(err);
+    }
+  }
+
+  // Esc in the editor. A dirty buffer asks first — this is the one place the
+  // app can lose the user's typing.
+  async function closeEditor(discard = false) {
+    if (!editorDoc) return;
+    if (editorDirty && !discard) {
+      deleteConfirm = null;
+      unsavedPrompt = true;
+      return;
+    }
+    const id = editorDoc.id;
+    editorDoc = null;
+    unsavedPrompt = false;
+    saveConflict = null;
+    overlayMessage = "";
+    await editor.close(id).catch(() => {});
+    await refreshBoth();
+  }
+
+  async function editorToView() {
+    if (!editorDoc) return;
+    if (editorDirty) {
+      overlayMessage = "Save (F2) before switching to the viewer";
+      return;
+    }
+    try {
+      const id = editorDoc.id;
+      editorDoc = null;
+      viewerPage = await editor.toView(id);
+    } catch (err) {
+      overlayMessage = errMessage(err);
+    }
+  }
+
+  // Keys while the viewer is open. Everything it does is a core call that
+  // returns a new page; nothing about the file is decided here.
+  function handleViewerKey(action: string): boolean {
+    if (!viewerPage) return false;
+    const id = viewerPage.id;
+    const motions: Record<string, ViewMotion> = {
+      "viewer.line_up": "line_up",
+      "viewer.line_down": "line_down",
+      "viewer.page_up": "page_up",
+      "viewer.page_down": "page_down",
+      "viewer.home": "home",
+      "viewer.end": "end",
+      "viewer.col_left": "col_left",
+      "viewer.col_right": "col_right",
+    };
+    const motion = motions[action];
+    if (motion) {
+      void viewerDo(() => viewer.scroll(id, motion));
+      return true;
+    }
+    switch (action) {
+      case "viewer.close":
+        void closeViewer();
+        return true;
+      case "viewer.toggle_hex":
+        void viewerDo(() => viewer.toggleHex(id));
+        return true;
+      case "viewer.toggle_wrap":
+        void viewerDo(() => viewer.setWrap(id, !viewerPage!.wrap));
+        return true;
+      case "viewer.to_edit":
+        void viewerToEdit();
+        return true;
+      case "viewer.goto":
+        textPrompt = { kind: "goto", value: "" };
+        return true;
+      case "viewer.search":
+        textPrompt = { kind: "search", value: lastSearch };
+        return true;
+      case "viewer.search_next":
+        void runSearch(lastSearch, "forward");
+        return true;
+    }
+    return false;
+  }
+
+  function handleEditorKey(action: string): boolean {
+    switch (action) {
+      case "editor.save":
+        void saveEditor();
+        return true;
+      case "editor.to_view":
+        void editorToView();
+        return true;
+      case "editor.close":
+        void closeEditor();
+        return true;
+    }
+    return false;
+  }
+
+  // Keys for the two dialogs the editor can raise: a save conflict and an
+  // unsaved-changes confirmation.
+  function handleOverlayDialogKey(e: KeyboardEvent): boolean {
+    if (saveConflict) {
+      switch (e.key) {
+        case "o": case "O": saveConflict = null; void saveEditor(true); return true;
+        case "Escape": case "c": case "C": saveConflict = null; return true;
+      }
+      return false;
+    }
+    if (unsavedPrompt) {
+      switch (e.key) {
+        case "s": case "S": unsavedPrompt = false; void saveEditor().then(() => closeEditor(true)); return true;
+        case "d": case "D": void closeEditor(true); return true;
+        case "Escape": case "c": case "C": unsavedPrompt = false; return true;
+      }
+      return false;
+    }
+    return false;
+  }
+
   // Keyboard handling while a (non-text) op modal is open. Returns true only when
   // the key maps to a modal action, so the caller can preventDefault just those.
   function handleModalKey(e: KeyboardEvent): boolean {
@@ -502,9 +790,31 @@
 
   async function onKeydown(e: KeyboardEvent) {
     shiftHeld = e.shiftKey;
-    // Text prompts (destination, mkdir, rename) own the keyboard via their focused
-    // <input>; let them be.
+    // Text prompts (destination, mkdir, rename, search, goto) own the keyboard
+    // via their focused <input>; let them be.
     if (destPrompt || textPrompt) return;
+    // The overlay dialogs the viewer/editor can raise answer for themselves.
+    if (saveConflict || unsavedPrompt) {
+      if (e.metaKey || e.ctrlKey) return;
+      if (handleOverlayDialogKey(e)) e.preventDefault();
+      return;
+    }
+    // The embedded surfaces own the keyboard while they are open (§6). In the
+    // editor, anything not bound to a command is text the user is typing, so it
+    // must fall through to the <textarea> untouched.
+    if (keyContext !== "panels") {
+      if (e.metaKey || e.ctrlKey) return;
+      const bound = keymaps[keyContext]?.[chord(e)];
+      if (!bound) {
+        // The viewer has no text entry, so unbound keys do nothing there.
+        if (keyContext === "viewer") e.preventDefault();
+        return;
+      }
+      const handled =
+        keyContext === "viewer" ? handleViewerKey(bound) : handleEditorKey(bound);
+      if (handled) e.preventDefault();
+      return;
+    }
     // Other op modals consume their own keys and otherwise block navigation —
     // but must let OS/browser shortcuts (Cmd/Ctrl combos, e.g. Cmd+Q) through.
     if (activeOp || prompt || deleteConfirm || execView) {
@@ -513,7 +823,7 @@
       return;
     }
 
-    const action = keymapByChord[chord(e)];
+    const action = keymaps.panels?.[chord(e)];
     if (!action) return;
     e.preventDefault();
     const active = snapshot.active;
@@ -529,9 +839,9 @@
       } else if (action === "op.rename") {
         openRename();
       } else if (action === "open.view") {
-        await open.openEntry(active, "view");
+        receiveOpen(await open.openEntry(active, "view"));
       } else if (action === "open.edit") {
-        await open.openEntry(active, "edit");
+        receiveOpen(await open.openEntry(active, "edit"));
       } else if (action.startsWith("cursor.")) {
         snapshot = await nav.moveCursor(active, action.slice("cursor.".length) as Motion);
       } else if (action.startsWith("select.")) {
@@ -576,7 +886,7 @@
     const unlisten: UnlistenFn[] = [];
     (async () => {
       try {
-        keymapByChord = buildKeymap(await nav.getKeymap());
+        keymaps = buildKeymap(await nav.getKeymap());
         snapshot = await nav.init();
         await tick();
         await measureAll();
@@ -817,7 +1127,7 @@
   {:else if textPrompt}
     <div class="overlay" role="presentation">
       <div class="dialog">
-        <h2>{textPrompt.kind === "mkdir" ? "Create directory:" : "Rename to:"}</h2>
+        <h2>{PROMPT_TITLES[textPrompt.kind]}</h2>
         {#if textPrompt.kind === "rename"}
           <input
             class="dest-input"
@@ -845,7 +1155,7 @@
           <p class="inline-error">{textPrompt.error}</p>
         {/if}
         <div class="buttons">
-          <button onclick={() => void confirmText()}>{textPrompt.kind === "mkdir" ? "Create" : "Rename"}</button>
+          <button onclick={() => void confirmText()}>{PROMPT_ACTIONS[textPrompt.kind]}</button>
           <button onclick={cancelText}>Cancel</button>
         </div>
       </div>
@@ -937,6 +1247,47 @@
       </div>
     </div>
   {/if}
+
+  <!-- The embedded viewer / editor (§5.5). Full-window over the panels, the way
+       FAR's do — only one is ever open. Both are pure renderers: every row and
+       every document fact comes from the core. -->
+  {#if editorDoc}
+    <Editor doc={editorDoc} bind:text={editorText} dirty={editorDirty} message={overlayMessage} />
+  {:else if viewerPage}
+    <Viewer
+      page={viewerPage}
+      message={overlayMessage}
+      onGeometry={(rows, cols) => void viewerDo(() => viewer.setViewport(viewerPage!.id, rows, cols))}
+    />
+  {/if}
+
+  <!-- Editor dialogs, above the overlay. A save conflict is a failure state, so
+       it uses the red dialog (§5.4b). -->
+  {#if saveConflict}
+    <div class="overlay" role="presentation">
+      <div class="dialog error">
+        <h2>Cannot save</h2>
+        <p class="path" title={editorDoc?.path}>{editorDoc?.name}</p>
+        <p class="reason">{saveConflict}</p>
+        <div class="buttons">
+          <button onclick={() => { saveConflict = null; void saveEditor(true); }}><u>O</u>verwrite</button>
+          <button onclick={() => (saveConflict = null)}><u>C</u>ancel</button>
+        </div>
+      </div>
+    </div>
+  {:else if unsavedPrompt}
+    <div class="overlay" role="presentation">
+      <div class="dialog">
+        <h2>Unsaved changes</h2>
+        <p class="path" title={editorDoc?.path}>{editorDoc?.name}</p>
+        <div class="buttons">
+          <button onclick={() => { unsavedPrompt = false; void saveEditor().then(() => closeEditor(true)); }}><u>S</u>ave</button>
+          <button onclick={() => void closeEditor(true)}><u>D</u>iscard</button>
+          <button onclick={() => (unsavedPrompt = false)}><u>C</u>ancel</button>
+        </div>
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -964,6 +1315,11 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
+    /* Grid and flex items default to min-width:auto, which lets a long
+       directory path force the panel — and the whole window — wider than the
+       viewport. Both this and `.path` need an explicit 0 for the path's
+       ellipsis to actually get a chance to apply. */
+    min-width: 0;
     background: var(--bg);
     border-top: 2px solid transparent;
     cursor: default;
@@ -988,6 +1344,8 @@
     border-top: 1px solid var(--border);
   }
   .path {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
