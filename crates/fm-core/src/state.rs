@@ -4,7 +4,19 @@
 //! platform-agnostic core, not in the Tauri adapter. The adapter merely wraps it
 //! in a `Mutex` and exposes it as Tauri-managed state.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
 use crate::types::{AppSnapshot, Config, PanelId, PanelPrefs, PanelState};
+
+/// A cached recursive folder size, keyed by absolute path in
+/// [`AppState::size_cache`]. `dir_mtime` is the top directory's mtime at
+/// calculation time, so a later refresh can detect direct-child changes.
+#[derive(Debug, Clone, Copy)]
+pub struct CachedSize {
+    pub size: u64,
+    pub dir_mtime: i64,
+}
 
 /// Holds both panels, the active-panel selector, and the loaded configuration.
 ///
@@ -18,6 +30,9 @@ pub struct AppState {
     pub right: PanelState,
     pub active: PanelId,
     pub config: Config,
+    /// Recursively computed folder sizes keyed by absolute path (F3). Surfaced
+    /// into each dir entry's `computed_size` by [`snapshot`](AppState::snapshot).
+    pub size_cache: HashMap<PathBuf, CachedSize>,
 }
 
 impl AppState {
@@ -64,13 +79,64 @@ impl AppState {
     }
 
     /// A serializable snapshot of the whole navigation state for the frontend.
+    ///
+    /// Pure/no-IO: each panel is cloned and its directory entries have
+    /// `computed_size` filled from [`size_cache`](AppState::size_cache) by simple
+    /// path lookups — never a filesystem walk.
     pub fn snapshot(&self) -> AppSnapshot {
         AppSnapshot {
-            left: self.left.clone(),
-            right: self.right.clone(),
+            left: self.panel_snapshot(PanelId::Left),
+            right: self.panel_snapshot(PanelId::Right),
             active: self.active,
             trash_default: self.config.trash_default,
         }
+    }
+
+    /// Clone a panel and surface any cached recursive folder sizes onto its dir
+    /// entries. `..` and non-directories are left untouched.
+    fn panel_snapshot(&self, id: PanelId) -> PanelState {
+        let mut panel = self.panel(id).clone();
+        if self.size_cache.is_empty() || panel.path.is_empty() {
+            return panel;
+        }
+        let base = Path::new(&panel.path);
+        for entry in &mut panel.entries {
+            if entry.kind != crate::types::EntryKind::Dir || entry.name == ".." {
+                continue;
+            }
+            if let Some(cached) = self.size_cache.get(&base.join(&entry.name)) {
+                entry.computed_size = Some(cached.size);
+            }
+        }
+        panel
+    }
+
+    /// Record a freshly computed recursive folder size (F3).
+    pub fn set_size(&mut self, path: PathBuf, size: u64, dir_mtime: i64) {
+        self.size_cache.insert(path, CachedSize { size, dir_mtime });
+    }
+
+    /// Drop cache entries affected by a change at `path`: the path itself, its
+    /// ancestors (whose totals changed), and its descendants (if `path` moved or
+    /// was deleted).
+    pub fn invalidate_size_cache(&mut self, path: &Path) {
+        self.size_cache
+            .retain(|k, _| !(k.starts_with(path) || path.starts_with(k)));
+    }
+
+    /// Opportunistically drop cached sizes under `base` whose directory mtime has
+    /// changed (a direct child added/removed/renamed) or that no longer exist.
+    /// Called on refresh — catches external changes the app didn't make. Entries
+    /// outside `base` are left untouched. Note: a change to a *deep* descendant
+    /// that doesn't alter any ancestor's mtime is not detected here and requires
+    /// an explicit F3 recompute.
+    pub fn revalidate_sizes_under(&mut self, base: &Path) {
+        self.size_cache.retain(|k, v| {
+            if !k.starts_with(base) {
+                return true;
+            }
+            crate::fs::dir_mtime(k) == Some(v.dir_mtime)
+        });
     }
 }
 

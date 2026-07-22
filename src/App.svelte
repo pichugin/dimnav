@@ -196,7 +196,18 @@
   }
 
   function selectedSize(p: PanelState): number {
-    return p.selection.reduce((sum, i) => sum + (p.entries[i]?.size ?? 0), 0);
+    // A calculated folder (F3) contributes its recursive size; everything else
+    // its own size. `computed_size` is only set on folders that have been walked.
+    return p.selection.reduce((sum, i) => {
+      const e = p.entries[i];
+      return sum + (e?.computed_size ?? e?.size ?? 0);
+    }, 0);
+  }
+
+  // Byte-exact size for the status bar and selection total. Precision matters
+  // (§ user request) so we group digits rather than collapse to K/M/G.
+  function bytesFmt(bytes: number): string {
+    return `${bytes.toLocaleString("en-US")} bytes`;
   }
 
   function buildKeymap(bindings: KeyBinding[]): Record<string, Record<string, string>> {
@@ -316,6 +327,45 @@
     return out;
   }
 
+  // Full-precision timestamp for the status bar: YYYY-MM-DD HH:MM:SS.
+  function fmtDateTime(unixSeconds: number): string {
+    if (!unixSeconds) return "—";
+    const d = new Date(unixSeconds * 1000);
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }
+
+  // Leading type char for the attribute string (drwxr-xr-x).
+  function typeChar(kind: Entry["kind"]): string {
+    switch (kind) {
+      case "dir":
+        return "d";
+      case "symlink":
+        return "l";
+      case "special":
+        return "s";
+      default:
+        return "-";
+    }
+  }
+
+  // The full attribute + owner + size + dates string for the focused entry,
+  // rendered in the bottom status bar. `..` gets no metadata line.
+  function focusedInfo(p: PanelState): string {
+    const e = p.entries[p.cursor_index];
+    if (!e || e.name === "..") return "";
+    const attrs = typeChar(e.kind) + fmtPerms(e.permissions);
+    const owner = `${e.owner ?? e.uid}:${e.group ?? e.gid}`;
+    const size =
+      e.kind === "dir"
+        ? e.computed_size != null
+          ? bytesFmt(e.computed_size)
+          : "---"
+        : bytesFmt(e.size);
+    const link = e.symlink_target ? ` → ${e.symlink_target}` : "";
+    return `${attrs}  ${owner}  ${size}  mod ${fmtDateTime(e.modified)}  crt ${fmtDateTime(e.created)}${link}`;
+  }
+
   // Mouse: single-click focuses the clicked entry (and activates its panel). The
   // core owns the cursor index; we just report the clicked global index.
   async function focusEntry(side: PanelId, index: number) {
@@ -337,6 +387,35 @@
     } catch (err) {
       status = `error: ${errMessage(err)}`;
     }
+  }
+
+  function joinPath(base: string, name: string): string {
+    return base.endsWith("/") ? base + name : `${base}/${name}`;
+  }
+
+  // F3: on a file, open the viewer. On a folder, recursively calculate its size
+  // (and every currently selected folder) instead — the result shows in the
+  // status bar and folds into the selection total. `..` is ignored.
+  async function viewOrCalcSize(side: PanelId) {
+    const p = snapshot[side];
+    const focused = p.entries[p.cursor_index];
+    if (focused && focused.kind === "dir" && focused.name !== "..") {
+      const paths = new Set<string>([joinPath(p.path, focused.name)]);
+      for (const i of p.selection) {
+        const e = p.entries[i];
+        if (e && e.kind === "dir" && e.name !== "..") paths.add(joinPath(p.path, e.name));
+      }
+      const prev = status;
+      status = "Calculating…";
+      try {
+        snapshot = await nav.calculateDirSize([...paths]);
+        status = prev;
+      } catch (err) {
+        status = `error: ${errMessage(err)}`;
+      }
+      return;
+    }
+    receiveOpen(await open.openEntry(side, "view"));
   }
 
   // Enter / double-click behavior on the focused entry: directories, symlinks,
@@ -839,7 +918,7 @@
       } else if (action === "op.rename") {
         openRename();
       } else if (action === "open.view") {
-        receiveOpen(await open.openEntry(active, "view"));
+        await viewOrCalcSize(active);
       } else if (action === "open.edit") {
         receiveOpen(await open.openEntry(active, "edit"));
       } else if (action.startsWith("cursor.")) {
@@ -979,6 +1058,10 @@
     return p.entries[p.cursor_index]?.name ?? "";
   });
 
+  // Rich metadata line for the focused entry (attributes, owner:group, exact
+  // byte size, modified/created datetimes), shown beside the name.
+  const focusedMeta = $derived.by(() => focusedInfo(snapshot[snapshot.active]));
+
   // Function-key hints. While Shift is held, F6 advertises its shifted action
   // (Rename) instead of Move, so the bar reflects what the next keystroke does.
   const fkeys = $derived<[string, string][]>([
@@ -1081,7 +1164,7 @@
 
         <footer class="panel-foot">
           <span>
-            {p.selection.length} selected{p.selection.length ? ` · ${humanSize(selectedSize(p))}` : ""}
+            {p.selection.length} selected{p.selection.length ? ` · ${bytesFmt(selectedSize(p))}` : ""}
           </span>
           <span>{p.entries.length ? p.cursor_index + 1 : 0} / {p.entries.length}</span>
         </footer>
@@ -1098,7 +1181,12 @@
   </nav>
 
   <div class="statusbar">
-    <span class="focused">{focused}</span>
+    <span class="focused-group">
+      <span class="focused">{focused}</span>
+      {#if focusedMeta}
+        <span class="focused-meta">{focusedMeta}</span>
+      {/if}
+    </span>
     <span class="state">{status}</span>
   </div>
 
@@ -1489,9 +1577,29 @@
     border-top: 1px solid var(--border);
     color: var(--fg-dim);
   }
+  .focused-group {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    min-width: 0;
+    overflow: hidden;
+  }
   .focused {
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 0;
+    max-width: 40%;
+  }
+  .focused-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    color: var(--fg);
+  }
+  .state {
+    flex-shrink: 0;
     white-space: nowrap;
   }
 

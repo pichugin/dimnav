@@ -37,6 +37,7 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::refresh,
             commands::create_dir,
             commands::rename,
+            commands::calculate_dir_size,
             commands::set_trash_default,
             commands::start_transfer,
             commands::start_delete,

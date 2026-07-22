@@ -392,6 +392,10 @@ pub async fn refresh(state: State<'_, SharedState>, panel: PanelId) -> Result<Ap
     let mut s = state.lock().map_err(lock_err)?;
     // Cursor *and* selection follow the entries by name across the re-read (§5.6).
     fm_core::nav::set_listing_preserving(s.panel_mut(panel), listing);
+    // Drop any cached folder sizes under this directory whose contents changed
+    // underneath us (external edits) — a user-initiated safety net (§ caching).
+    let base = PathBuf::from(&s.panel(panel).path);
+    s.revalidate_sizes_under(&base);
     Ok(s.snapshot())
 }
 
@@ -430,6 +434,10 @@ pub async fn create_dir(
     .map_err(|e| e.to_string())?;
 
     let mut s = state.lock().map_err(lock_err)?;
+    // Adding a folder changes the parent's total, so invalidate it and its
+    // ancestors (§ caching).
+    let parent = PathBuf::from(&s.panel(panel).path);
+    s.invalidate_size_cache(&parent);
     let p = s.panel_mut(panel);
     fm_core::nav::set_listing(p, listing);
     if let Some(name) = focus {
@@ -470,9 +478,49 @@ pub async fn rename(
     .map_err(|e| e.to_string())?;
 
     let mut s = state.lock().map_err(lock_err)?;
+    // A rename can change what a cached folder covers; invalidate the old and new
+    // paths and their ancestors (§ caching).
+    let base = PathBuf::from(&s.panel(panel).path);
+    s.invalidate_size_cache(&base.join(&old));
+    s.invalidate_size_cache(&base.join(new_name.trim()));
     let p = s.panel_mut(panel);
     fm_core::nav::set_listing(p, listing);
     fm_core::nav::position_on(p, &focus);
+    Ok(s.snapshot())
+}
+
+// --- Recursive folder size (F3 on a folder) ---------------------------------
+
+/// Recursively compute the size of each folder in `paths` and cache the results,
+/// then return a fresh snapshot with the computed sizes surfaced onto the
+/// matching dir entries (`computed_size`). This always recomputes the requested
+/// paths — pressing F3 again is the explicit "recalculate" gesture.
+///
+/// The walk runs on the blocking thread pool and never holds the state lock, so
+/// large trees never block the UI (§5.4a). Infinite recursion is prevented by
+/// [`fm_core::fs::dir_size`] (symlinks are never followed).
+#[tauri::command]
+#[specta::specta]
+pub async fn calculate_dir_size(
+    state: State<'_, SharedState>,
+    paths: Vec<String>,
+) -> Result<AppSnapshot, String> {
+    let results = tauri::async_runtime::spawn_blocking(move || {
+        paths
+            .into_iter()
+            .map(|p| {
+                let (size, mtime) = fm_core::fs::dir_size(Path::new(&p));
+                (PathBuf::from(p), size, mtime)
+            })
+            .collect::<Vec<_>>()
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut s = state.lock().map_err(lock_err)?;
+    for (path, size, mtime) in results {
+        s.set_size(path, size, mtime);
+    }
     Ok(s.snapshot())
 }
 
@@ -538,6 +586,16 @@ pub fn start_transfer(
     // new folder for them".
     if req.sources.len() == 1 && !Path::new(&req.dest).exists() {
         return Err(format!("destination folder does not exist: {}", req.dest));
+    }
+
+    // The transfer changes both the destination's total and (for a move) each
+    // source's parent total, so drop their cached folder sizes (§ caching).
+    {
+        let mut s = state.lock().map_err(lock_err)?;
+        s.invalidate_size_cache(Path::new(&req.dest));
+        for src in &req.sources {
+            s.invalidate_size_cache(Path::new(src));
+        }
     }
 
     let (tx, rx) = std::sync::mpsc::channel::<UserInput>();
@@ -620,6 +678,15 @@ pub fn start_delete(
 
     if req.paths.is_empty() {
         return Err("nothing to delete".to_string());
+    }
+
+    // Deleting changes each parent's total, so drop cached folder sizes for the
+    // targets and their ancestors (§ caching).
+    {
+        let mut s = state.lock().map_err(lock_err)?;
+        for path in &req.paths {
+            s.invalidate_size_cache(Path::new(path));
+        }
     }
 
     let (tx, rx) = std::sync::mpsc::channel::<UserInput>();

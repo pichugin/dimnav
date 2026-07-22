@@ -52,12 +52,28 @@ pub struct Entry {
     pub size: u64,
     /// Modification time, Unix seconds.
     pub modified: i64,
+    /// Creation/birth time, Unix seconds; `0` when the platform/filesystem does
+    /// not report it.
+    pub created: i64,
     /// POSIX permission bits (e.g. `0o755`).
     pub permissions: u32,
+    /// Numeric owner uid / group gid (0 on non-unix).
+    pub uid: u32,
+    pub gid: u32,
+    /// Resolved owner / group names; `None` when unresolved (frontend then shows
+    /// the numeric id).
+    pub owner: Option<String>,
+    pub group: Option<String>,
+    /// Hardlink count (0 on non-unix).
+    pub nlink: u32,
     /// Target path when `kind == Symlink`; `None` otherwise.
     pub symlink_target: Option<String>,
     pub is_executable: bool,
     pub marker: EntryMarker,
+    /// Recursively computed folder size in bytes, when it has been calculated
+    /// (F3) and is present in the size cache; `None` otherwise. Always `None`
+    /// for non-directories.
+    pub computed_size: Option<u64>,
 }
 
 /// Per-panel view mode. `Columns(n)` covers the brief multi-column modes

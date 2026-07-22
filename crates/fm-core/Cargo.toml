@@ -17,6 +17,11 @@ specta = { workspace = true }
 toml = "0.8"
 dirs = "5"
 
+# Resolve numeric uid/gid to owner/group names for the file-info status bar.
+# Unix-only (macOS/Linux); gated so the non-unix build never sees it.
+[target.'cfg(unix)'.dependencies]
+uzers = "0.12"
+
 # NOTE: `tauri` is intentionally absent here and must stay that way. `cargo tree
 # -p fm-core` showing no tauri is the structural proof of the swappable-frontend
 # boundary (SPEC §3 / CLAUDE.md non-negotiable rules).

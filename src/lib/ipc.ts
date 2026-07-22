@@ -105,6 +105,9 @@ export const nav = {
   // Create directory (F7) / Rename (Shift+F6) (§5.4)
   createDir: (panel: PanelId, name: string) => unwrap(commands.createDir(panel, name)),
   rename: (panel: PanelId, newName: string) => unwrap(commands.rename(panel, newName)),
+  // Recursively compute folder sizes (F3 on a folder); results are cached and
+  // surfaced onto entries' `computed_size`.
+  calculateDirSize: (paths: string[]) => unwrap(commands.calculateDirSize(paths)),
   setTrashDefault: (value: boolean) => unwrap(commands.setTrashDefault(value)),
 };
 

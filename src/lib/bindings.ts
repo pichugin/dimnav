@@ -90,6 +90,17 @@ export const commands = {
 	 */
 	rename: (panel: PanelId, newName: string) => typedError<AppSnapshot, string>(__TAURI_INVOKE("rename", { panel, newName })),
 	/**
+	 *  Recursively compute the size of each folder in `paths` and cache the results,
+	 *  then return a fresh snapshot with the computed sizes surfaced onto the
+	 *  matching dir entries (`computed_size`). This always recomputes the requested
+	 *  paths — pressing F3 again is the explicit "recalculate" gesture.
+	 * 
+	 *  The walk runs on the blocking thread pool and never holds the state lock, so
+	 *  large trees never block the UI (§5.4a). Infinite recursion is prevented by
+	 *  [`fm_core::fs::dir_size`] (symlinks are never followed).
+	 */
+	calculateDirSize: (paths: string[]) => typedError<AppSnapshot, string>(__TAURI_INVOKE("calculate_dir_size", { paths })),
+	/**
 	 *  Set the global "Move to Trash" default (the delete-dialog checkbox), OFF by
 	 *  default and persisted across sessions (§5.4a).
 	 */
@@ -311,12 +322,34 @@ export type Entry = {
 	size: number,
 	/**  Modification time, Unix seconds. */
 	modified: number,
+	/**
+	 *  Creation/birth time, Unix seconds; `0` when the platform/filesystem does
+	 *  not report it.
+	 */
+	created: number,
 	/**  POSIX permission bits (e.g. `0o755`). */
 	permissions: number,
+	/**  Numeric owner uid / group gid (0 on non-unix). */
+	uid: number,
+	gid: number,
+	/**
+	 *  Resolved owner / group names; `None` when unresolved (frontend then shows
+	 *  the numeric id).
+	 */
+	owner: string | null,
+	group: string | null,
+	/**  Hardlink count (0 on non-unix). */
+	nlink: number,
 	/**  Target path when `kind == Symlink`; `None` otherwise. */
 	symlink_target: string | null,
 	is_executable: boolean,
 	marker: EntryMarker,
+	/**
+	 *  Recursively computed folder size in bytes, when it has been calculated
+	 *  (F3) and is present in the size cache; `None` otherwise. Always `None`
+	 *  for non-directories.
+	 */
+	computed_size: number | null,
 };
 
 /**  What kind of filesystem object an entry is. */

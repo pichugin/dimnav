@@ -10,11 +10,53 @@
 //! Kept platform-agnostic: unix-only metadata sits behind `#[cfg(unix)]` with
 //! fallbacks so Phase 4 (Windows/Linux) only has to add arms.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
 use crate::types::{DirListing, Entry, EntryKind, EntryMarker, SortMode};
+
+/// Resolves and memoizes uid/gid → name lookups for the span of a single
+/// listing. Most directories are owned by one or two users, so a tiny cache
+/// removes almost all of the (comparatively expensive) passwd/group lookups.
+#[derive(Default)]
+struct OwnerResolver {
+    users: HashMap<u32, Option<String>>,
+    groups: HashMap<u32, Option<String>>,
+}
+
+impl OwnerResolver {
+    #[cfg(unix)]
+    fn user(&mut self, uid: u32) -> Option<String> {
+        self.users
+            .entry(uid)
+            .or_insert_with(|| {
+                uzers::get_user_by_uid(uid).map(|u| u.name().to_string_lossy().into_owned())
+            })
+            .clone()
+    }
+
+    #[cfg(unix)]
+    fn group(&mut self, gid: u32) -> Option<String> {
+        self.groups
+            .entry(gid)
+            .or_insert_with(|| {
+                uzers::get_group_by_gid(gid).map(|g| g.name().to_string_lossy().into_owned())
+            })
+            .clone()
+    }
+
+    #[cfg(not(unix))]
+    fn user(&mut self, _uid: u32) -> Option<String> {
+        None
+    }
+
+    #[cfg(not(unix))]
+    fn group(&mut self, _gid: u32) -> Option<String> {
+        None
+    }
+}
 
 /// List a directory into a structured result. `show_hidden` controls whether
 /// dotfiles are included (§5.8). The first entry is always `..` unless `path` is
@@ -32,13 +74,14 @@ pub fn list_dir(path: &str, show_hidden: bool, sort: SortMode) -> DirListing {
     }
 
     let mut children: Vec<Entry> = Vec::new();
+    let mut resolver = OwnerResolver::default();
     if let Ok(read) = fs::read_dir(p) {
         for dirent in read.flatten() {
             let name = dirent.file_name().to_string_lossy().into_owned();
             if !show_hidden && name.starts_with('.') {
                 continue;
             }
-            children.push(entry_from_path(&dirent.path(), name));
+            children.push(entry_from_path(&dirent.path(), name, &mut resolver));
         }
     }
 
@@ -58,15 +101,22 @@ fn dotdot_entry() -> Entry {
         kind: EntryKind::Dir,
         size: 0,
         modified: 0,
+        created: 0,
         permissions: 0,
+        uid: 0,
+        gid: 0,
+        owner: None,
+        group: None,
+        nlink: 0,
         symlink_target: None,
         is_executable: false,
         marker: EntryMarker::Ok,
+        computed_size: None,
     }
 }
 
 /// Build an [`Entry`] from a path, never failing — read errors become markers.
-fn entry_from_path(path: &Path, name: String) -> Entry {
+fn entry_from_path(path: &Path, name: String, resolver: &mut OwnerResolver) -> Entry {
     // `symlink_metadata` does not follow links, so we can detect symlinks and
     // read the link's own metadata for move/delete semantics (§5.4a).
     let link_meta = match fs::symlink_metadata(path) {
@@ -108,15 +158,25 @@ fn entry_from_path(path: &Path, name: String) -> Entry {
     // else the link's own.
     let meta = target_meta.as_ref().unwrap_or(&link_meta);
 
+    let uid = uid_of(meta);
+    let gid = gid_of(meta);
+
     Entry {
         name,
         kind,
         size: meta.len(),
         modified: mtime_secs(meta),
+        created: ctime_secs(meta),
         permissions: mode_bits(meta),
+        uid,
+        gid,
+        owner: resolver.user(uid),
+        group: resolver.group(gid),
+        nlink: nlink_of(meta),
         symlink_target,
         is_executable: is_executable(meta),
         marker,
+        computed_size: None,
     }
 }
 
@@ -139,10 +199,17 @@ fn unreadable_entry(name: String, _err: &std::io::Error) -> Entry {
         kind: EntryKind::Special,
         size: 0,
         modified: 0,
+        created: 0,
         permissions: 0,
+        uid: 0,
+        gid: 0,
+        owner: None,
+        group: None,
+        nlink: 0,
         symlink_target: None,
         is_executable: false,
         marker: EntryMarker::Denied,
+        computed_size: None,
     }
 }
 
@@ -153,6 +220,48 @@ fn mtime_secs(meta: &std::fs::Metadata) -> i64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Creation/birth time as Unix seconds, or 0 if the platform does not report it.
+fn ctime_secs(meta: &std::fs::Metadata) -> i64 {
+    meta.created()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+#[cfg(unix)]
+fn uid_of(meta: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    meta.uid()
+}
+
+#[cfg(not(unix))]
+fn uid_of(_meta: &std::fs::Metadata) -> u32 {
+    0
+}
+
+#[cfg(unix)]
+fn gid_of(meta: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    meta.gid()
+}
+
+#[cfg(not(unix))]
+fn gid_of(_meta: &std::fs::Metadata) -> u32 {
+    0
+}
+
+#[cfg(unix)]
+fn nlink_of(meta: &std::fs::Metadata) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    meta.nlink() as u32
+}
+
+#[cfg(not(unix))]
+fn nlink_of(_meta: &std::fs::Metadata) -> u32 {
+    0
 }
 
 #[cfg(unix)]
@@ -281,6 +390,81 @@ pub fn rename_entry(dir: &Path, old: &str, new: &str) -> Result<(), String> {
     fs::rename(dir.join(old), &target).map_err(|e| format!("could not rename: {e}"))
 }
 
+/// Belt-and-suspenders cap on directory nesting for [`dir_size`], guarding
+/// against pathological trees. The real cycle guard is that we never follow
+/// symlinks (see below); this only bounds absurdly deep real hierarchies.
+const MAX_DIR_DEPTH: usize = 4096;
+
+/// Recursively compute the on-disk size of a directory subtree, returning
+/// `(total_bytes, dir_mtime_secs)` where `dir_mtime_secs` is the mtime of the
+/// top directory (used by the cache to detect direct-child changes).
+///
+/// Guard rails against infinite recursion (§ hardening):
+/// - Uses `symlink_metadata` and **descends only into real directories** —
+///   symlinks are never followed, so symlink cycles are impossible (the same
+///   technique `ops::count_items` relies on).
+/// - Iterative (explicit stack), so deep trees can't overflow the call stack.
+/// - Bounded by [`MAX_DIR_DEPTH`].
+/// - Deduplicates hardlinks by `(dev, ino)` on unix, so each physical inode is
+///   counted once (accurate, `du`-like) — this also doubles as an extra cycle
+///   guard for exotic layouts (bind mounts, etc.).
+/// Unreadable subdirectories are skipped rather than aborting the walk.
+pub fn dir_size(path: &Path) -> (u64, i64) {
+    let root_mtime = fs::symlink_metadata(path).map(|m| mtime_secs(&m)).unwrap_or(0);
+
+    let mut total: u64 = 0;
+    #[cfg(unix)]
+    let mut seen: std::collections::HashSet<(u64, u64)> = std::collections::HashSet::new();
+    // Stack of (dir_path, depth). We start from the root's children.
+    let mut stack: Vec<(std::path::PathBuf, usize)> = vec![(path.to_path_buf(), 0)];
+
+    while let Some((dir, depth)) = stack.pop() {
+        if depth >= MAX_DIR_DEPTH {
+            continue;
+        }
+        let read = match fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue, // unreadable subdir — skip, don't abort
+        };
+        for child in read.flatten() {
+            let cpath = child.path();
+            // `symlink_metadata`: a symlink reports as a symlink (never a dir),
+            // so it is counted as a leaf and never descended into.
+            let meta = match fs::symlink_metadata(&cpath) {
+                Ok(m) => m,
+                Err(_) => continue,
+            };
+            let ft = meta.file_type();
+            // Symlinks are pointers, not content: never followed (this is the
+            // cycle guard) and their own bytes are not counted.
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                stack.push((cpath, depth + 1));
+                continue;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                // Count each physical inode once (hardlink dedup).
+                if meta.nlink() > 1 && !seen.insert((meta.dev(), meta.ino())) {
+                    continue;
+                }
+            }
+            total += meta.len();
+        }
+    }
+
+    (total, root_mtime)
+}
+
+/// The mtime (Unix seconds) of `path`, or `None` if it cannot be stat'd (e.g. it
+/// was removed). Used by the size cache to detect direct-child changes.
+pub fn dir_mtime(path: &Path) -> Option<i64> {
+    fs::symlink_metadata(path).ok().map(|m| mtime_secs(&m))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -341,10 +525,17 @@ mod tests {
             kind,
             size,
             modified,
+            created: 0,
             permissions: 0,
+            uid: 0,
+            gid: 0,
+            owner: None,
+            group: None,
+            nlink: 0,
             symlink_target: None,
             is_executable: false,
             marker: EntryMarker::Ok,
+            computed_size: None,
         }
     }
 
@@ -411,5 +602,51 @@ mod tests {
         assert!(rename_entry(&dir, "delta.txt", "  ").is_err());
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn dir_size_sums_recursively_and_survives_symlink_loops() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("fm_core_dirsize_{nanos}"));
+        fs::create_dir_all(root.join("sub/deep")).unwrap();
+
+        // Known byte sizes at several depths.
+        fs::write(root.join("a.bin"), vec![0u8; 1000]).unwrap();
+        fs::write(root.join("sub/b.bin"), vec![0u8; 200]).unwrap();
+        fs::write(root.join("sub/deep/c.bin"), vec![0u8; 30]).unwrap();
+
+        // A symlink pointing back at the root would recurse forever if followed.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(&root, root.join("loop")).unwrap();
+        }
+
+        let (total, mtime) = dir_size(&root);
+        assert_eq!(total, 1230, "should sum all files once, not follow the loop");
+        assert!(mtime > 0);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dir_size_dedups_hardlinks() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("fm_core_dirsize_hl_{nanos}"));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("orig.bin"), vec![0u8; 500]).unwrap();
+        fs::hard_link(root.join("orig.bin"), root.join("link.bin")).unwrap();
+
+        let (total, _) = dir_size(&root);
+        assert_eq!(total, 500, "hardlinked inode counted once");
+
+        fs::remove_dir_all(&root).ok();
     }
 }

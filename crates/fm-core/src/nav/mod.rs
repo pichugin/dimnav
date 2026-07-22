@@ -273,10 +273,17 @@ mod tests {
             kind,
             size: 0,
             modified: 0,
+            created: 0,
             permissions: 0,
+            uid: 0,
+            gid: 0,
+            owner: None,
+            group: None,
+            nlink: 0,
             symlink_target: None,
             is_executable: false,
             marker: EntryMarker::Ok,
+            computed_size: None,
         }
     }
 
