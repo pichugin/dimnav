@@ -5,6 +5,8 @@ A fast, keyboard-first, **two-panel file manager** (Norton Commander / FarManage
 
 **Full specification: `./docs/SPEC.md` — read it before implementing anything.** This file holds only the durable rules that must survive long sessions.
 
+**Feature checklist: `./docs/FEATURES.md`** — what is built vs. planned. Update it as part of any slice that ships or plans a feature.
+
 ## Non-negotiable architecture rules
 - **All logic lives in the Rust core** (file ops, navigation/selection state, config, plugin host) behind a **clean, typed IPC contract**.
 - **The frontend is a thin, swappable rendering layer.** No business logic in the webview. This is what keeps a future swap to Iced/egui possible — do not violate it.

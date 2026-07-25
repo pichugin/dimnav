@@ -10,7 +10,7 @@
 //! the event contract concrete in the generated bindings.
 
 use fm_core::types::{
-    CollisionPrompt, ExecDone, ExecOutput, OpErrorInfo, OpOutcome, OpProgress, PanelChanged,
+    CollisionPrompt, OpErrorInfo, OpOutcome, OpProgress, PanelChanged, TerminalChunk, TerminalState,
 };
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -50,15 +50,19 @@ pub struct PanelChangedEvent(pub PanelChanged);
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 pub struct ConfigChangedEvent;
 
-/// One line of stdout/stderr from a running executable (Enter-on-executable,
-/// §5.5). Phase 1 appends these to the output modal.
+/// Fresh output from the running command (§5.7). Carries a *line delta* — the
+/// lines completed, the new partial tail, and how many old lines the core
+/// evicted — so the frontend's mirror stays exact without knowing the eviction
+/// policy.
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 #[serde(transparent)]
 #[specta(transparent)]
-pub struct ExecOutputEvent(pub ExecOutput);
+pub struct TerminalChunkEvent(pub TerminalChunk);
 
-/// A running executable finished (§5.5).
+/// The command line's state changed from the backend rather than from a command
+/// the frontend issued — i.e. a run finished, so the indicator must change
+/// colour (§5.7).
 #[derive(Debug, Clone, Serialize, Deserialize, Type, Event)]
 #[serde(transparent)]
 #[specta(transparent)]
-pub struct ExecDoneEvent(pub ExecDone);
+pub struct TerminalStateEvent(pub TerminalState);

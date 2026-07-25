@@ -6,8 +6,8 @@
 
 mod commands;
 mod events;
-mod exec_runtime;
 mod ops_runtime;
+mod terminal_runtime;
 
 use tauri_specta::{collect_commands, collect_events, Builder};
 
@@ -45,7 +45,18 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::resolve_error,
             commands::cancel_op,
             commands::open_entry,
-            commands::cancel_exec,
+            // Embedded terminal (§5.7).
+            commands::terminal_toggle_focus,
+            commands::terminal_toggle_half,
+            commands::terminal_toggle_curtain,
+            commands::terminal_set_input,
+            commands::terminal_run,
+            commands::terminal_interrupt_or_clear,
+            commands::terminal_history,
+            commands::terminal_insert_name,
+            commands::terminal_set_scrollback,
+            commands::terminal_clear_buffer,
+            commands::terminal_buffer,
             // Embedded viewer / editor (§5.5).
             commands::view_set_viewport,
             commands::view_scroll,
@@ -66,8 +77,8 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             events::OpCompleteEvent,
             events::PanelChangedEvent,
             events::ConfigChangedEvent,
-            events::ExecOutputEvent,
-            events::ExecDoneEvent,
+            events::TerminalChunkEvent,
+            events::TerminalStateEvent,
         ])
 }
 
@@ -106,9 +117,9 @@ pub fn run() {
         // In-flight file operations (copy/move), so command handlers can answer
         // prompts and cancel a running op.
         .manage(ops_runtime::OpRegistry::default())
-        // The single running executable (Enter-on-executable), so `cancel_exec`
-        // can kill it (§5.5).
-        .manage(exec_runtime::ExecState::default())
+        // The single running command — typed at the prompt or started by Enter
+        // on an executable — so Ctrl+C can interrupt it (§5.7).
+        .manage(terminal_runtime::TerminalRuntime::default())
         // Open viewer sessions and editor documents. Both registries are
         // `fm-core` types; the adapter owns nothing but the lock (§5.5).
         .manage(commands::ViewState::default())

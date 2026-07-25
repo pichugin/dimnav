@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::terminal::Terminal;
 use crate::types::{AppSnapshot, Config, PanelId, PanelPrefs, PanelState};
 
 /// A cached recursive folder size, keyed by absolute path in
@@ -24,24 +25,29 @@ pub struct CachedSize {
 /// the single source of truth for the persisted preferences (§5.8 / §7), and
 /// [`sync_prefs_from_panels`](AppState::sync_prefs_from_panels) is the one place
 /// live panel state flows back into it before a save.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct AppState {
     pub left: PanelState,
     pub right: PanelState,
     pub active: PanelId,
     pub config: Config,
+    /// The command line (§5.7). It lives beside the panels rather than in its own
+    /// lock because it reads the active panel's directory on every run and every
+    /// snapshot — one lock keeps that consistent.
+    pub terminal: Terminal,
     /// Recursively computed folder sizes keyed by absolute path (F3). Surfaced
     /// into each dir entry's `computed_size` by [`snapshot`](AppState::snapshot).
     pub size_cache: HashMap<PathBuf, CachedSize>,
 }
 
 impl AppState {
-    /// Apply loaded preferences to both panels (view/sort/hidden). The starting
-    /// directories are resolved by the caller, which owns the "does it still
-    /// exist?" filesystem question.
+    /// Apply loaded preferences to both panels (view/sort/hidden) and the
+    /// terminal. The starting directories are resolved by the caller, which owns
+    /// the "does it still exist?" filesystem question.
     pub fn apply_config(&mut self, config: Config) {
         apply_prefs(&mut self.left, &config.left_panel);
         apply_prefs(&mut self.right, &config.right_panel);
+        self.terminal.apply_prefs(&config.terminal);
         self.config = config;
     }
 
@@ -50,6 +56,13 @@ impl AppState {
     pub fn sync_prefs_from_panels(&mut self) {
         capture_prefs(&self.left, &mut self.config.left_panel);
         capture_prefs(&self.right, &mut self.config.right_panel);
+        self.terminal.capture_prefs(&mut self.config.terminal);
+    }
+
+    /// The directory the terminal runs in — the active panel's, which is what
+    /// makes the prompt "already in the folder you were browsing" (§5.7).
+    pub fn terminal_cwd(&self) -> String {
+        self.panel(self.active).path.clone()
     }
 
     /// The persisted "Move to Trash" default for the delete dialog — OFF by
@@ -89,7 +102,21 @@ impl AppState {
             right: self.panel_snapshot(PanelId::Right),
             active: self.active,
             trash_default: self.config.trash_default,
+            terminal: self.terminal.state(&self.terminal_cwd()),
         }
+    }
+
+    /// [`snapshot`](Self::snapshot) for a command the **user** initiated.
+    ///
+    /// Deliberately a separate entry point: the terminal's run indicator fades
+    /// its green/red verdict to grey the moment the user touches any control
+    /// (§5.7), so "was this a user action or a background refresh?" has to be
+    /// answerable. `set_viewport` (fired by a resize observer) and `refresh`
+    /// (fired when an operation completes) use the plain
+    /// [`snapshot`](Self::snapshot) precisely because they are neither.
+    pub fn snapshot_after_input(&mut self) -> AppSnapshot {
+        self.terminal.touch();
+        self.snapshot()
     }
 
     /// Clone a panel and surface any cached recursive folder sizes onto its dir

@@ -21,6 +21,13 @@
   --file-code: var(--accent); /* source code: the classic selection blue */
   --file-selected: #ffd633; /* selected rows: bright yellow */
 
+  /* Terminal run indicator (SPEC §5.7). Idle is drawn at low opacity by the
+     component, so this only has to be a neutral. */
+  --term-idle: #8a8a92;
+  --term-run: #e0c04a; /* running: yellow, flashing */
+  --term-ok: #6fbf73; /* finished clean: green */
+  --term-err: #d86b6b; /* failed or wrote to stderr: red */
+
   color-scheme: light dark;
 }
 
@@ -43,6 +50,11 @@
     --file-data: #2f6b4a;
     --file-code: var(--accent);
     --file-selected: #a67c00;
+
+    --term-idle: #8a8a92;
+    --term-run: #b8890f;
+    --term-ok: #3f9b52;
+    --term-err: #c0392b;
   }
 }
 

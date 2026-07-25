@@ -10,6 +10,7 @@ import type {
   AppSnapshot,
   ErrorResolution,
   GotoTarget,
+  HistoryDir,
   Motion,
   NavTarget,
   OpenAction,
@@ -47,8 +48,13 @@ export type {
   OpOutcome,
   CollisionPrompt,
   OpErrorInfo,
-  ExecOutput,
-  ExecDone,
+  // Embedded terminal (§5.7)
+  TerminalState,
+  TerminalStatus,
+  TerminalSize,
+  TerminalChunk,
+  TerminalBuffer,
+  HistoryDir,
   // Embedded viewer / editor (§5.5)
   OpenOutcome,
   ViewPage,
@@ -130,14 +136,46 @@ export const ops = {
 
 /**
  * Open / View / Edit API (§5.5). `openEntry` opens the entry under the given
- * panel's cursor with an external tool — Open uses the system default (and runs
- * executables, streaming output via {@link events.execOutputEvent}); View/Edit
- * route to the configured tool. `cancelExec` kills a running executable.
+ * panel's cursor with an external tool — Open uses the system default and runs
+ * executables, streaming their output into the terminal buffer; View/Edit route
+ * to the configured tool or the embedded surfaces.
  */
 export const open = {
   openEntry: (panel: PanelId, action: OpenAction) =>
     unwrap(commands.openEntry(panel, action)),
-  cancelExec: () => unwrap(commands.cancelExec()),
+};
+
+/**
+ * Embedded terminal API (§5.7). The core owns the prompt text, the history, the
+ * scrollback and its eviction, the run-status machine, and the built-ins — every
+ * call here just forwards an intent and gets the whole {@link AppSnapshot} back.
+ *
+ * Output does not come through these calls: it arrives as
+ * {@link events.terminalChunkEvent} line deltas, and `buffer` re-syncs the
+ * frontend's mirror from scratch.
+ */
+export const terminal = {
+  /** Cmd+T — move the keyboard to the prompt, or back to the active panel. */
+  toggleFocus: () => unwrap(commands.terminalToggleFocus()),
+  /** Cmd+Shift+T — expand to the bottom half of the window, or collapse. */
+  toggleHalf: () => unwrap(commands.terminalToggleHalf()),
+  /** Esc — the panels-aside curtain over the full-height terminal (§6). */
+  toggleCurtain: () => unwrap(commands.terminalToggleCurtain()),
+  /**
+   * Mirror what the user is typing. Fire-and-forget by design: re-rendering the
+   * input from the response would fight the caret (see `input_rev`).
+   */
+  setInput: (text: string) => unwrap(commands.terminalSetInput(text)),
+  run: () => unwrap(commands.terminalRun()),
+  /** Ctrl+C — interrupt a running command, else clear the prompt. */
+  interruptOrClear: () => unwrap(commands.terminalInterruptOrClear()),
+  history: (dir: HistoryDir) => unwrap(commands.terminalHistory(dir)),
+  /** Ctrl+Enter — append the panel's focused name, shell-quoted (§5.7). */
+  insertName: (panel: PanelId) => unwrap(commands.terminalInsertName(panel)),
+  setScrollback: (bytes: number) => unwrap(commands.terminalSetScrollback(bytes)),
+  clearBuffer: () => unwrap(commands.terminalClearBuffer()),
+  /** The whole scrollback — the frontend's initial sync and re-sync. */
+  buffer: () => unwrap(commands.terminalBuffer()),
 };
 
 /**

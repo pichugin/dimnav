@@ -167,6 +167,10 @@ pub struct AppSnapshot {
     /// Global "Move to Trash" default for the delete dialog, OFF by default
     /// (§5.4a). The frontend renders the checkbox from this.
     pub trash_default: bool,
+    /// The command line's state (§5.7). Rides along on every snapshot so the
+    /// terminal row re-renders in lockstep with the panels — in particular its
+    /// `cwd`, which follows the active panel.
+    pub terminal: TerminalState,
 }
 
 // ---------------------------------------------------------------------------
@@ -338,20 +342,124 @@ pub struct PanelChanged {
     pub state: PanelState,
 }
 
-/// One line of output from a running executable (§5.5 / §5.7). Phase 1 renders
-/// these into a simple output modal; Phase 2 routes the same stream into the
-/// embedded terminal (the `plugin::ExecutionSink` seam) without changing callers.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct ExecOutput {
-    pub line: String,
+// ---------------------------------------------------------------------------
+// Embedded terminal (§5.7 / §8 Phase 2)
+// ---------------------------------------------------------------------------
+
+/// What the run-status indicator at the right edge of the command line shows.
+///
+/// `Ok`/`Error` are the *last* run's verdict and decay back to `Idle` as soon as
+/// the user touches any control again, so a stale green dot never masquerades as
+/// a fresh result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalStatus {
+    /// Nothing has run since the user last did something — grey, barely visible.
+    #[default]
+    Idle,
+    /// A command is running — yellow, flashing.
+    Running,
+    /// Last run exited 0 and wrote nothing to stderr — green.
+    Ok,
+    /// Last run exited non-zero or wrote to stderr — red.
+    Error,
 }
 
-/// A run started by Enter-on-executable has finished (§5.5). `code` is the
-/// process exit code, or `-1` when it was killed / had no code.
-#[derive(Debug, Clone, Serialize, Deserialize, Type)]
-pub struct ExecDone {
-    pub code: i32,
-    pub summary: String,
+/// How much room the terminal occupies. Three sizes, two toggles: Cmd+Shift+T
+/// flips `Collapsed` ↔ `Half`, and Esc draws the panels aside as a curtain over
+/// the `Full` terminal (§6) and back again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum TerminalSize {
+    /// Just the command line, directly under the panel footers.
+    #[default]
+    Collapsed,
+    /// Bottom half of the window: output pane above, command line pinned below.
+    Half,
+    /// Panels hidden entirely — the Esc curtain.
+    Full,
+}
+
+/// Direction for command-history recall (Up / Down at the prompt).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum HistoryDir {
+    /// Older — what Up does.
+    Prev,
+    /// Newer, ending back at the line the user was typing.
+    Next,
+}
+
+/// Which pipe a chunk of output came from. Only the core cares: a command that
+/// wrote *anything* to stderr finishes `Error` even when it exits 0 (§5.7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum Stream {
+    Stdout,
+    Stderr,
+}
+
+/// The command line's full state — everything the prompt row renders.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct TerminalState {
+    /// The text in the prompt. Survives losing focus: it is core state, not a
+    /// property of the focused widget (§5.7).
+    pub input: String,
+    /// Bumped **only** when the core itself rewrites `input` (history recall,
+    /// Ctrl+Enter insertion, clear, run). The frontend re-seeds its `<input>`
+    /// element on a change and otherwise leaves the user's typing alone, so a
+    /// snapshot arriving mid-keystroke can never clobber it.
+    pub input_rev: u32,
+    /// Working directory the next command runs in — the active panel's directory
+    /// (§8 Phase 2: the terminal tracks the active panel).
+    pub cwd: String,
+    pub size: TerminalSize,
+    /// Whether the prompt owns the keyboard (Cmd+T). Drives the accent border.
+    pub focused: bool,
+    pub status: TerminalStatus,
+    /// The command line currently executing, if any.
+    pub running: Option<String>,
+    /// Scrollback cap in bytes, configurable from the expanded pane (1 MiB
+    /// default, §5.7).
+    pub scrollback_bytes: u64,
+}
+
+/// An incremental scrollback update.
+///
+/// The core owns the buffer and its eviction policy; this is the delta that
+/// keeps the frontend's mirror exact. Lines rather than bytes, deliberately — a
+/// byte count would be unusable in a frontend that indexes strings in UTF-16
+/// units.
+///
+/// **Apply it in this order — append, then drop:**
+///
+/// ```text
+/// lines   = lines.concat(chunk.lines).slice(chunk.dropped)
+/// pending = chunk.pending
+/// ```
+///
+/// The order is load-bearing, not stylistic. The core appends and *then* trims,
+/// so a single large append can evict lines it just added — feed a 3000-line
+/// burst into a 2 KB buffer and `dropped` exceeds everything the mirror held
+/// beforehand. Dropping first would clamp at zero and leak the surplus, leaving
+/// the mirror permanently longer than the buffer it mirrors.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct TerminalChunk {
+    /// Lines completed by this append (no trailing newline).
+    pub lines: Vec<String>,
+    /// The still-incomplete trailing line; replaces whatever partial the
+    /// frontend was holding.
+    pub pending: String,
+    /// Leading lines evicted to stay under the byte cap, counted **after** this
+    /// append — so it can exceed the mirror's previous length.
+    pub dropped: u32,
+}
+
+/// The whole scrollback, pulled on expand / on mount / after a cap change.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct TerminalBuffer {
+    pub lines: Vec<String>,
+    pub pending: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -610,6 +718,32 @@ impl Default for ViewerPrefs {
     }
 }
 
+/// Embedded-terminal preferences (§7). The scrollback cap is adjustable from the
+/// corner of the expanded pane, and the pane's size is remembered across
+/// restarts the way the panels remember their view state (§5.8).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(default)]
+pub struct TerminalPrefs {
+    /// Scrollback cap in bytes — 1 MiB by default (§5.7).
+    pub scrollback_bytes: u64,
+    /// Shell used to run commands. `None` means `$SHELL`, falling back to
+    /// `/bin/sh`.
+    pub shell: Option<String>,
+    /// The pane size to restore on launch. `Full` is deliberately not persisted
+    /// — the Esc curtain is a transient look, not a startup state.
+    pub size: TerminalSize,
+}
+
+impl Default for TerminalPrefs {
+    fn default() -> Self {
+        Self {
+            scrollback_bytes: 1 << 20, // 1 MiB
+            shell: None,
+            size: TerminalSize::Collapsed,
+        }
+    }
+}
+
 /// Root config document (serialized to TOML). Ships with working defaults — the
 /// app is fully usable with zero configuration (§7).
 ///
@@ -633,8 +767,12 @@ pub struct Config {
     pub left_panel: PanelPrefs,
     pub right_panel: PanelPrefs,
     pub viewer: ViewerPrefs,
+    pub terminal: TerminalPrefs,
     /// File-type → external-application map (§5.5). Empty by default, so every
     /// file opens with the system default until the user edits the TOML.
+    ///
+    /// Stays **last**: it serializes as an array-of-tables, and TOML rejects any
+    /// plain value or table emitted after one.
     pub associations: Vec<FileAssociation>,
 }
 
@@ -647,6 +785,7 @@ impl Default for Config {
             left_panel: PanelPrefs::default(),
             right_panel: PanelPrefs::default(),
             viewer: ViewerPrefs::default(),
+            terminal: TerminalPrefs::default(),
             associations: Vec::new(),
         }
     }

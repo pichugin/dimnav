@@ -16,16 +16,17 @@ use fm_core::open::{EmbeddedMode, OpenPlan};
 use fm_core::state::AppState;
 use fm_core::types::{
     AppSnapshot, Config, DeleteRequest, DirListing, EditDoc, EntryKind, ErrorResolution, GotoTarget,
-    KeyBinding, MediaKind, Motion, NavTarget, OpKind, OpenAction, OpenOutcome, OpRequest, PanelId,
-    Resolution, SaveOutcome, SearchDirection, SortMode, ViewMode, ViewMotion, ViewPage, ViewerMode,
+    HistoryDir, KeyBinding, MediaKind, Motion, NavTarget, OpKind, OpenAction, OpenOutcome,
+    OpRequest, PanelId, Resolution, SaveOutcome, SearchDirection, SortMode, TerminalBuffer,
+    ViewMode, ViewMotion, ViewPage, ViewerMode,
 };
 use fm_core::view::{edit::Docs, Sessions};
 use tauri::{AppHandle, State};
 use tauri_specta::Event;
 
 use crate::events::OpCompleteEvent;
-use crate::exec_runtime::{self, ExecState};
 use crate::ops_runtime::{registry, OpRegistry, TauriObserver, UserInput};
+use crate::terminal_runtime::{self, TerminalRuntime};
 
 /// Tauri-managed shared navigation state.
 pub type SharedState = Mutex<AppState>;
@@ -114,9 +115,16 @@ pub async fn init(state: State<'_, SharedState>) -> Result<AppSnapshot, String> 
     let (dir_left, dir_right) = (start_dir(&config.left_panel), start_dir(&config.right_panel));
     let (pl, pr) = (config.left_panel.clone(), config.right_panel.clone());
 
+    // Command history is a separate file beside config.toml, so it is read the
+    // same way: off-thread, and never fatal if it is missing (§5.7 / §7).
+    let history = tauri::async_runtime::spawn_blocking(fm_core::terminal::history::load)
+        .await
+        .map_err(|e| e.to_string())?;
+
     {
         let mut s = state.lock().map_err(lock_err)?;
         s.apply_config(config);
+        s.terminal.set_history(history);
     }
 
     let left = tauri::async_runtime::spawn_blocking(move || {
@@ -151,7 +159,7 @@ pub fn set_view_mode(
     let mut s = state.lock().map_err(lock_err)?;
     s.panel_mut(panel).view_mode = mode;
     persist(&mut s);
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Set a panel's sort mode (§5.8). Re-sorts the entries already loaded — no I/O —
@@ -168,7 +176,7 @@ pub fn set_sort_mode(
     p.sort_mode = mode;
     fm_core::nav::resort(p);
     persist(&mut s);
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Show or hide dotfiles in a panel (§5.8 — shown by default). Needs a re-read,
@@ -196,7 +204,7 @@ pub async fn set_show_hidden(
     let mut s = state.lock().map_err(lock_err)?;
     fm_core::nav::set_listing_preserving(s.panel_mut(panel), listing);
     persist(&mut s);
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Report a panel's rendered layout so the cursor state machine can compute the
@@ -224,7 +232,7 @@ pub fn move_cursor(
 ) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
     fm_core::nav::move_cursor(s.panel_mut(panel), motion);
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Move a panel's cursor to an explicit entry index (SPEC §5.2). Backs mouse-click
@@ -239,7 +247,7 @@ pub fn set_cursor(
 ) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
     fm_core::nav::set_cursor(s.panel_mut(panel), index);
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Set the active (focused) panel (SPEC §5.1).
@@ -251,7 +259,11 @@ pub fn set_active_panel(
 ) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
     s.set_active(panel);
-    Ok(s.snapshot())
+    // Reaching for a panel — by Tab or by clicking it — is a request for the
+    // keyboard to be there, so the prompt gives it up (§5.7). Ignored while the
+    // Esc curtain is drawn, since there is no visible panel to hand it to.
+    s.terminal.set_focused(false);
+    Ok(s.snapshot_after_input())
 }
 
 // --- Selection (§5.3) -------------------------------------------------------
@@ -265,7 +277,7 @@ pub fn toggle_selection(
 ) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
     fm_core::nav::toggle_selection(s.panel_mut(panel));
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Additively select the entry under the cursor, then move (Shift+Arrow).
@@ -278,7 +290,7 @@ pub fn select_and_move(
 ) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
     fm_core::nav::select_and_move(s.panel_mut(panel), motion);
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Select all selectable entries in the panel (`*`).
@@ -287,7 +299,7 @@ pub fn select_and_move(
 pub fn select_all(state: State<'_, SharedState>, panel: PanelId) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
     fm_core::nav::select_all(s.panel_mut(panel));
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Clear the panel's selection (`-`).
@@ -296,7 +308,7 @@ pub fn select_all(state: State<'_, SharedState>, panel: PanelId) -> Result<AppSn
 pub fn deselect_all(state: State<'_, SharedState>, panel: PanelId) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
     fm_core::nav::deselect_all(s.panel_mut(panel));
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Navigate a panel: into the entry under the cursor, up to the parent (with the
@@ -351,8 +363,8 @@ pub async fn navigate(
 
     let Some(path) = target_path else {
         // Nothing to do (file under cursor, or parent at a root): return as-is.
-        let s = state.lock().map_err(lock_err)?;
-        return Ok(s.snapshot());
+        let mut s = state.lock().map_err(lock_err)?;
+        return Ok(s.snapshot_after_input());
     };
 
     let listing = tauri::async_runtime::spawn_blocking(move || {
@@ -369,7 +381,7 @@ pub async fn navigate(
     }
     // Remember the new directory so the next launch reopens here (§7).
     persist(&mut s);
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Re-read a panel's current directory, keeping the cursor on the same entry name
@@ -443,7 +455,7 @@ pub async fn create_dir(
     if let Some(name) = focus {
         fm_core::nav::position_on(p, &name);
     }
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Rename the entry under `panel`'s cursor to `new_name`, in place (Shift+F6).
@@ -486,7 +498,7 @@ pub async fn rename(
     let p = s.panel_mut(panel);
     fm_core::nav::set_listing(p, listing);
     fm_core::nav::position_on(p, &focus);
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 // --- Recursive folder size (F3 on a folder) ---------------------------------
@@ -521,7 +533,7 @@ pub async fn calculate_dir_size(
     for (path, size, mtime) in results {
         s.set_size(path, size, mtime);
     }
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 // --- File operations: copy / move (§5.4a) -----------------------------------
@@ -632,7 +644,7 @@ pub fn set_trash_default(
     let mut s = state.lock().map_err(lock_err)?;
     s.config.trash_default = value;
     persist(&mut s);
-    Ok(s.snapshot())
+    Ok(s.snapshot_after_input())
 }
 
 /// Begin a delete (F8) of the active panel's selection — or, when nothing is
@@ -756,14 +768,15 @@ pub fn cancel_op(registry_state: State<'_, OpRegistry>, op_id: String) -> Result
 pub fn open_entry(
     app: AppHandle,
     state: State<'_, SharedState>,
-    exec_state: State<'_, ExecState>,
+    runtime: State<'_, TerminalRuntime>,
     view_state: State<'_, ViewState>,
     edit_state: State<'_, EditState>,
     panel: PanelId,
     action: OpenAction,
 ) -> Result<OpenOutcome, String> {
     let (entry, cwd, config) = {
-        let s = state.lock().map_err(lock_err)?;
+        let mut s = state.lock().map_err(lock_err)?;
+        s.terminal.touch();
         let p = s.panel(panel);
         (
             p.entries.get(p.cursor_index).cloned(),
@@ -787,7 +800,25 @@ pub fn open_entry(
             Ok(OpenOutcome::Launched)
         }
         OpenPlan::Execute { path, cwd } => {
-            exec_runtime::spawn_exec(app, &exec_state, path, cwd)?;
+            // Enter-on-executable and a typed command are the same thing from
+            // here on: both echo a prompt line and stream into the terminal
+            // buffer, so the pane reads the same either way (§5.5 / §5.7).
+            let command = fm_core::terminal::quote(&path);
+            {
+                let mut s = state.lock().map_err(lock_err)?;
+                s.terminal.begin_external(command.clone(), &cwd);
+            }
+            emit_terminal_chunks(&app, &state)?;
+            emit_terminal_state(&app, &state)?;
+            if let Err(reason) = terminal_runtime::spawn(
+                app.clone(),
+                &runtime,
+                config.terminal.shell.clone(),
+                command,
+                cwd,
+            ) {
+                record_spawn_failure(&app, &state, &reason)?;
+            }
             Ok(OpenOutcome::Executing)
         }
         OpenPlan::Embedded { path, mode } => {
@@ -983,12 +1014,238 @@ pub fn edit_close(edit_state: State<'_, EditState>, id: String) -> Result<(), St
     Ok(())
 }
 
-/// Kill the executable currently running in the output modal, if any (§5.5).
+// --- Embedded terminal (§5.7) ------------------------------------------------
+//
+// The core owns the prompt text, the history, the scrollback, the run-status
+// machine, and the built-ins; these handlers are the usual marshalling plus the
+// one side-effect the core cannot perform — spawning a process.
+
+/// Push whatever buffer deltas the core has queued — the echoed prompt line, an
+/// exit footer, a `clear`. Commands return an [`AppSnapshot`] for the prompt row,
+/// but scrollback travels as events, so this is the other half of every terminal
+/// handler that can touch the buffer.
+fn emit_terminal_chunks(app: &AppHandle, state: &State<'_, SharedState>) -> Result<(), String> {
+    let chunks = {
+        let mut s = state.lock().map_err(lock_err)?;
+        s.terminal.drain_chunks()
+    };
+    for chunk in chunks {
+        let _ = crate::events::TerminalChunkEvent(chunk).emit(app);
+    }
+    Ok(())
+}
+
+/// Push a freshly rendered terminal state. Used when the backend changes it
+/// outside a command's return value.
+fn emit_terminal_state(app: &AppHandle, state: &State<'_, SharedState>) -> Result<(), String> {
+    let term = {
+        let s = state.lock().map_err(lock_err)?;
+        s.terminal.state(&s.terminal_cwd())
+    };
+    let _ = crate::events::TerminalStateEvent(term).emit(app);
+    Ok(())
+}
+
+/// Record a command that could not even start (bad path, permission denied) in
+/// the buffer and turn the indicator red — a spawn failure is a normal, visible
+/// outcome, not an exception (§5.6).
+fn record_spawn_failure(
+    app: &AppHandle,
+    state: &State<'_, SharedState>,
+    reason: &str,
+) -> Result<(), String> {
+    {
+        let mut s = state.lock().map_err(lock_err)?;
+        s.terminal.fail(reason);
+    }
+    emit_terminal_chunks(app, state)?;
+    emit_terminal_state(app, state)
+}
+
+/// Cmd+T: move the keyboard to the prompt, or hand it back to the panel that is
+/// still marked active (§5.7).
 #[tauri::command]
 #[specta::specta]
-pub fn cancel_exec(exec_state: State<'_, ExecState>) -> Result<(), String> {
-    exec_runtime::cancel(&exec_state);
+pub fn terminal_toggle_focus(state: State<'_, SharedState>) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    s.terminal.toggle_focus();
+    Ok(s.snapshot_after_input())
+}
+
+/// Cmd+Shift+T: expand the pane to the bottom half of the window, or collapse it
+/// back to the bare command line (§5.7).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_toggle_half(state: State<'_, SharedState>) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    s.terminal.toggle_half();
+    persist(&mut s);
+    Ok(s.snapshot_after_input())
+}
+
+/// Esc: draw the panels aside to reveal the full terminal, and back (§6).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_toggle_curtain(state: State<'_, SharedState>) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    s.terminal.toggle_curtain();
+    Ok(s.snapshot_after_input())
+}
+
+/// Mirror the text being typed at the prompt. Returns nothing: this is an echo
+/// of what the frontend already shows, and re-rendering from it would fight the
+/// caret (see `TerminalState::input_rev`).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_set_input(state: State<'_, SharedState>, text: String) -> Result<(), String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    s.terminal.touch();
+    s.terminal.set_input(text);
     Ok(())
+}
+
+/// Enter at the prompt. The core decides what the line means; a `cd` becomes a
+/// panel navigation, `clear` empties the buffer, and anything else is spawned.
+#[tauri::command]
+#[specta::specta]
+pub async fn terminal_run(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+    runtime: State<'_, TerminalRuntime>,
+) -> Result<AppSnapshot, String> {
+    let (plan, shell, history) = {
+        let mut s = state.lock().map_err(lock_err)?;
+        s.terminal.touch();
+        let cwd = s.terminal_cwd();
+        let plan = s.terminal.prepare(&cwd);
+        let shell = s.config.terminal.shell.clone();
+        let history = s.terminal.history().clone();
+        (plan, shell, history)
+    };
+
+    // Persist the command list off-thread, fire-and-forget, exactly as
+    // preferences are written — a failed history write must never break the
+    // command that triggered it.
+    if !matches!(plan, fm_core::terminal::RunPlan::Nothing) {
+        tauri::async_runtime::spawn_blocking(move || {
+            fm_core::terminal::history::save(&history)
+        });
+    }
+    // `prepare` echoed the prompt line (and, for `clear`, emptied the buffer);
+    // push that before doing anything slow, so the pane reflects the command the
+    // instant Enter is pressed.
+    emit_terminal_chunks(&app, &state)?;
+
+    match plan {
+        fm_core::terminal::RunPlan::Nothing | fm_core::terminal::RunPlan::Cleared => {}
+        fm_core::terminal::RunPlan::ChangeDir(path) => {
+            // `cd` moves the active panel, which is what keeps the prompt in the
+            // folder the user is looking at (§5.7).
+            let panel = state.lock().map_err(lock_err)?.active;
+            return navigate(state, panel, NavTarget::Path(path)).await;
+        }
+        fm_core::terminal::RunPlan::Spawn { command, cwd } => {
+            if let Err(reason) = terminal_runtime::spawn(app.clone(), &runtime, shell, command, cwd)
+            {
+                record_spawn_failure(&app, &state, &reason)?;
+            }
+        }
+    }
+
+    let mut s = state.lock().map_err(lock_err)?;
+    Ok(s.snapshot_after_input())
+}
+
+/// Ctrl+C: interrupt the running command, or — with nothing running — clear the
+/// prompt (§5.7).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_interrupt_or_clear(
+    state: State<'_, SharedState>,
+    runtime: State<'_, TerminalRuntime>,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    if s.terminal.is_running() {
+        // Drop the lock first: the reaping thread needs it to record the exit.
+        drop(s);
+        terminal_runtime::interrupt(&runtime);
+        let mut s = state.lock().map_err(lock_err)?;
+        return Ok(s.snapshot_after_input());
+    }
+    s.terminal.clear_input();
+    Ok(s.snapshot_after_input())
+}
+
+/// Up / Down at the prompt: recall a previous command (§5.7).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_history(
+    state: State<'_, SharedState>,
+    dir: HistoryDir,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    s.terminal.recall(dir);
+    Ok(s.snapshot_after_input())
+}
+
+/// Ctrl+Enter: append the name under `panel`'s cursor to the command line,
+/// shell-quoted, without the panel losing focus (§5.7).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_insert_name(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    let p = s.panel(panel);
+    let name = p
+        .entries
+        .get(p.cursor_index)
+        .map(|e| e.name.clone())
+        .filter(|n| n != "..");
+    if let Some(name) = name {
+        s.terminal.insert_name(&name);
+    }
+    Ok(s.snapshot_after_input())
+}
+
+/// Re-cap the scrollback from the control in the corner of the expanded pane,
+/// and persist the choice (§5.7 / §7).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_set_scrollback(
+    state: State<'_, SharedState>,
+    bytes: u64,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    s.terminal.set_scrollback_limit(bytes);
+    persist(&mut s);
+    Ok(s.snapshot_after_input())
+}
+
+/// Empty the scrollback (Ctrl+L, or the button in the corner).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_clear_buffer(
+    app: AppHandle,
+    state: State<'_, SharedState>,
+) -> Result<AppSnapshot, String> {
+    let snapshot = {
+        let mut s = state.lock().map_err(lock_err)?;
+        s.terminal.clear_buffer();
+        s.snapshot_after_input()
+    };
+    emit_terminal_chunks(&app, &state)?;
+    Ok(snapshot)
+}
+
+/// The whole scrollback, for the frontend's initial sync and any re-sync (on
+/// expand, or after the cap changes).
+#[tauri::command]
+#[specta::specta]
+pub fn terminal_buffer(state: State<'_, SharedState>) -> Result<TerminalBuffer, String> {
+    let s = state.lock().map_err(lock_err)?;
+    Ok(s.terminal.buffer())
 }
 
 /// Launch `path` in an external application. `app == None` → the system default

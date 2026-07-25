@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { nav, ops, open, viewer, editor, events } from "./lib/ipc";
+  import { nav, ops, open, viewer, editor, terminal, events } from "./lib/ipc";
   import type {
     AppSnapshot,
     EditDoc,
     Entry,
     ErrorResolution,
     GotoTarget,
+    HistoryDir,
     KeyBinding,
     Motion,
     OpKind,
@@ -16,12 +17,14 @@
     Resolution,
     SearchDirection,
     SortMode,
+    TerminalState,
     ViewMode,
     ViewMotion,
     ViewPage,
   } from "./lib/ipc";
   import Viewer from "./lib/Viewer.svelte";
   import Editor from "./lib/Editor.svelte";
+  import Terminal from "./lib/Terminal.svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
 
   // Row height in px — single source of truth shared by the grid layout and the
@@ -43,11 +46,25 @@
     };
   }
 
+  function emptyTerminal(): TerminalState {
+    return {
+      input: "",
+      input_rev: 0,
+      cwd: "",
+      size: "collapsed",
+      focused: false,
+      status: "idle",
+      running: null,
+      scrollback_bytes: 1024 * 1024,
+    };
+  }
+
   let snapshot = $state<AppSnapshot>({
     left: emptyPanel(),
     right: emptyPanel(),
     active: "left",
     trash_default: false,
+    terminal: emptyTerminal(),
   });
   let status = $state("starting…");
   // True while Shift is held, so the F-key bar can show its shifted labels
@@ -82,10 +99,14 @@
     error?: string;
   };
   let textPrompt = $state<TextPrompt | null>(null);
-  // The output modal for a running executable (Enter-on-executable, §5.5). Opens
-  // lazily when the first exec event arrives; the Phase-2 terminal replaces it.
-  type ExecView = { lines: string[]; done: boolean; code: number };
-  let execView = $state<ExecView | null>(null);
+  // --- Embedded terminal (§5.7) ---------------------------------------------
+  // A mirror of the core's scrollback, never a second copy of the policy: the
+  // core sends line deltas and says how many old lines it evicted, so keeping
+  // this in step is mechanical. `terminalRef` exposes the pane's scrolling for
+  // the PgUp/PgDn bindings.
+  let termLines = $state<string[]>([]);
+  let termPending = $state("");
+  let terminalRef = $state<Terminal | null>(null);
 
   // --- Embedded viewer / editor (§5.5) --------------------------------------
   // Only one of these is ever open, and it covers the panels like FAR's viewer.
@@ -106,24 +127,37 @@
   // Esc on a modified buffer, awaiting Save / Discard / Cancel.
   let unsavedPrompt = $state(false);
 
-  // Which keymap context owns the keyboard right now (§6).
-  const keyContext = $derived(editorDoc ? "editor" : viewerPage ? "viewer" : "panels");
+  // Which keymap context owns the keyboard right now (§6). The embedded
+  // surfaces win over the terminal: the viewer/editor cover the whole window, so
+  // while one is open it is the only thing the keyboard can sensibly reach.
+  const keyContext = $derived(
+    editorDoc ? "editor" : viewerPage ? "viewer" : snapshot.terminal.focused ? "terminal" : "panels",
+  );
 
   // context -> chord string -> action id, built from the core-provided keymap.
   let keymaps: Record<string, Record<string, string>> = {};
   const listingEls: Record<PanelId, HTMLElement | null> = { left: null, right: null };
 
-  // Canonical chord for a KeyboardEvent: modifiers in a fixed order, then the
-  // key. Shift is only added for named keys (length > 1) — for printable keys the
-  // shift is already baked into the character (e.g. `*` reports as "*"). Must
-  // match the format produced by the core keymap (config::default_keymap).
+  // Canonical chord for a KeyboardEvent: modifiers in the fixed order
+  // Ctrl+Meta+Alt+Shift, then the key. Must match the format the core keymap
+  // produces (config::default_keymap).
+  //
+  // Shift is deliberately *not* a part for a plain printable key, because the
+  // shift is already baked into the character there — `*` reports as "*", not as
+  // Shift+8. But that shortcut breaks the moment another modifier joins in: on
+  // macOS, WebKit reports the **unshifted** character while Command is held, so
+  // Cmd+Shift+T arrives as `key === "t"` and is indistinguishable from Cmd+T
+  // unless Shift is spelled out. Hence: with any non-shift modifier present,
+  // Shift becomes an explicit part and the letter is lower-cased, so the chord
+  // is the same whichever case the engine happens to report.
   function chord(e: KeyboardEvent): string {
     const parts: string[] = [];
     if (e.ctrlKey) parts.push("Ctrl");
     if (e.metaKey) parts.push("Meta");
     if (e.altKey) parts.push("Alt");
-    if (e.shiftKey && e.key.length > 1) parts.push("Shift");
-    parts.push(e.key);
+    const modified = e.ctrlKey || e.metaKey || e.altKey;
+    if (e.shiftKey && (e.key.length > 1 || modified)) parts.push("Shift");
+    parts.push(modified && e.key.length === 1 ? e.key.toLowerCase() : e.key);
     return parts.join("+");
   }
 
@@ -588,14 +622,107 @@
     }
   }
 
-  // Kill the executable running in the output modal (§5.5). The backend reaps it
-  // and emits the done event, which flips the modal to its finished state.
-  async function cancelExec() {
+  // --- Embedded terminal (§5.7) ---------------------------------------------
+  // Every one of these is a core call that returns the whole snapshot; nothing
+  // about the command line is decided here.
+
+  async function termDo(fn: () => Promise<AppSnapshot>) {
     try {
-      await open.cancelExec();
+      snapshot = await fn();
     } catch (err) {
       status = `error: ${errMessage(err)}`;
     }
+  }
+
+  // Re-pull the whole buffer. Cheap and always correct — used on mount and
+  // whenever the pane opens, since output accumulates while it is collapsed.
+  async function syncTerminalBuffer() {
+    try {
+      const buf = await terminal.buffer();
+      termLines = buf.lines;
+      termPending = buf.pending;
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  async function toggleTerminalSize() {
+    const wasCollapsed = snapshot.terminal.size === "collapsed";
+    await termDo(() => terminal.toggleHalf());
+    // Opening the pane reveals output produced while it was shut.
+    if (wasCollapsed) await syncTerminalBuffer();
+    await tick();
+    await measureAll(); // the panels just changed height
+  }
+
+  async function toggleTerminalCurtain() {
+    const wasCollapsed = snapshot.terminal.size === "collapsed";
+    await termDo(() => terminal.toggleCurtain());
+    if (wasCollapsed) await syncTerminalBuffer();
+    await tick();
+    await measureAll();
+  }
+
+  // The terminal actions reachable from the panels (§5.7): Cmd+T, Cmd+Shift+T,
+  // the Esc curtain, and Ctrl+Enter's filename insertion — which deliberately
+  // leaves focus where it is, so the user can keep moving the cursor and pressing
+  // it to build up a multi-file command.
+  async function runPanelTerminalAction(action: string) {
+    switch (action) {
+      case "terminal.focus":
+        await termDo(() => terminal.toggleFocus());
+        break;
+      case "terminal.toggle_half":
+        await toggleTerminalSize();
+        break;
+      case "terminal.curtain":
+        await toggleTerminalCurtain();
+        break;
+      case "terminal.insert_name":
+        await termDo(() => terminal.insertName(snapshot.active));
+        break;
+    }
+  }
+
+  // Keys while the prompt owns the keyboard. Returns true when the key was a
+  // bound command; anything else is text the user is typing and must reach the
+  // input untouched.
+  function handleTerminalKey(action: string): boolean {
+    switch (action) {
+      case "terminal.run":
+        void termDo(() => terminal.run());
+        return true;
+      case "terminal.blur":
+        void termDo(() => terminal.toggleFocus());
+        return true;
+      case "terminal.toggle_half":
+        void toggleTerminalSize();
+        return true;
+      case "terminal.curtain":
+        void toggleTerminalCurtain();
+        return true;
+      case "terminal.interrupt":
+        void termDo(() => terminal.interruptOrClear());
+        return true;
+      case "terminal.history_prev":
+      case "terminal.history_next":
+        void termDo(() =>
+          terminal.history(
+            (action === "terminal.history_prev" ? "prev" : "next") as HistoryDir,
+          ),
+        );
+        return true;
+      case "terminal.scroll_up":
+        terminalRef?.scrollByPage(-1);
+        return true;
+      case "terminal.scroll_down":
+        terminalRef?.scrollByPage(1);
+        return true;
+      case "terminal.clear_buffer":
+        void termDo(() => terminal.clearBuffer());
+        return true;
+    }
+    return false;
   }
 
   // --- Embedded viewer / editor (§5.5) --------------------------------------
@@ -855,15 +982,6 @@
       if (e.key === "Escape") { void cancelActiveOp(); return true; }
       return false;
     }
-    if (execView) {
-      // Esc cancels a running executable; once finished it closes the modal.
-      if (e.key === "Escape") {
-        if (execView.done) execView = null;
-        else void cancelExec();
-        return true;
-      }
-      return false;
-    }
     return false;
   }
 
@@ -876,6 +994,16 @@
     if (saveConflict || unsavedPrompt) {
       if (e.metaKey || e.ctrlKey) return;
       if (handleOverlayDialogKey(e)) e.preventDefault();
+      return;
+    }
+    // The terminal prompt owns the keyboard while it is focused (§5.7). Unlike
+    // the viewer/editor branch below, it must NOT bail out on Cmd/Ctrl before
+    // consulting the keymap — Cmd+T and Ctrl+C are its two most important
+    // bindings. Unbound combos still fall through, so Cmd+A/Cmd+V keep working
+    // in the input, and unbound plain keys are simply the user typing.
+    if (keyContext === "terminal") {
+      const bound = keymaps.terminal?.[chord(e)];
+      if (bound && handleTerminalKey(bound)) e.preventDefault();
       return;
     }
     // The embedded surfaces own the keyboard while they are open (§6). In the
@@ -896,8 +1024,17 @@
     }
     // Other op modals consume their own keys and otherwise block navigation —
     // but must let OS/browser shortcuts (Cmd/Ctrl combos, e.g. Cmd+Q) through.
-    if (activeOp || prompt || deleteConfirm || execView) {
-      if (e.metaKey || e.ctrlKey) return;
+    // The terminal keys are the exception: Cmd+T must reach the prompt even with
+    // a dialog up, or a modal could strand the keyboard.
+    if (activeOp || prompt || deleteConfirm) {
+      if (e.metaKey || e.ctrlKey) {
+        const bound = keymaps.panels?.[chord(e)];
+        if (bound?.startsWith("terminal.")) {
+          e.preventDefault();
+          void runPanelTerminalAction(bound);
+        }
+        return;
+      }
       if (handleModalKey(e)) e.preventDefault();
       return;
     }
@@ -944,6 +1081,8 @@
       } else if (action.startsWith("panel.view_")) {
         const which = action.slice("panel.view_".length);
         await setView(active, which === "detailed" ? { kind: "detailed" } : { kind: "columns", columns: Number(which) });
+      } else if (action.startsWith("terminal.")) {
+        await runPanelTerminalAction(action);
       }
     } catch (err) {
       status = `error: ${String(err)}`;
@@ -1012,25 +1151,29 @@
           }),
         );
 
-        // Executable run output (Enter-on-executable, §5.5). The modal opens
-        // lazily on the first event so a plain file-open (no events) never shows
-        // one. Reassign (not mutate) so Svelte's reactivity fires.
+        // Terminal scrollback (§5.7). The payload is a line delta: apply the
+        // core's eviction count, then append. This mirror holds no policy of its
+        // own, which is what keeps it from drifting from the core's buffer.
         unlisten.push(
-          await events.execOutputEvent.listen((e) => {
-            const line = e.payload.line;
-            execView = execView
-              ? { ...execView, lines: [...execView.lines, line] }
-              : { lines: [line], done: false, code: 0 };
+          await events.terminalChunkEvent.listen((e) => {
+            const c = e.payload;
+            // Append THEN drop — the order is the contract (see TerminalChunk).
+            // The core trims after appending, so one burst into a small buffer
+            // can evict lines it just added; dropping first would clamp at zero
+            // and leave the mirror permanently longer than the core's buffer.
+            const next = c.lines.length ? [...termLines, ...c.lines] : termLines;
+            termLines = c.dropped > 0 ? next.slice(c.dropped) : next;
+            termPending = c.pending;
           }),
         );
+        // The backend changing the terminal outside a command we issued — i.e. a
+        // run finished, so the indicator must change colour.
         unlisten.push(
-          await events.execDoneEvent.listen((e) => {
-            const { code } = e.payload;
-            execView = execView
-              ? { ...execView, done: true, code }
-              : { lines: [], done: true, code };
+          await events.terminalStateEvent.listen((e) => {
+            snapshot = { ...snapshot, terminal: e.payload };
           }),
         );
+        await syncTerminalBuffer();
 
         status = "ready";
       } catch (err) {
@@ -1076,17 +1219,24 @@
     ["Tab", "Switch"],
     ["Enter", "Open"],
     ["⌫", "Up"],
+    // The terminal is invisible until you know it is there (§5.7).
+    ["⌘T", "Term"],
+    [snapshot.terminal.size === "collapsed" ? "⌘⇧T" : "⌘⇧T", snapshot.terminal.size === "collapsed" ? "Output" : "Hide"],
   ]);
 </script>
 
 <main class="app">
-  <div class="panels">
+  <!-- The Esc curtain hides the panels entirely, revealing the full-height
+       terminal beneath them (SPEC §6). At every other size the terminal takes
+       its share below and the panels shrink to fit — pushed up, never covered. -->
+  <div class="panels" class:hidden={snapshot.terminal.size === "full"}>
     {#each SIDES as side}
       {@const p = snapshot[side]}
       {@const L = layout(p)}
       <section
         class="panel"
         class:active={snapshot.active === side}
+        class:dimmed={snapshot.terminal.focused}
         onclick={() => (snapshot.active !== side ? nav.setActivePanel(side).then((s) => (snapshot = s)) : null)}
         role="presentation"
       >
@@ -1172,8 +1322,19 @@
     {/each}
   </div>
 
-  <!-- Phase 2 seam: the terminal command line lives here; Esc will draw the
-       panels aside as a curtain over it (SPEC §5.7 / §6). -->
+  <!-- The command line, directly beneath the panel footers (§5.7). Expanded, its
+       output pane grows upward from here and the panels give up the room. -->
+  <Terminal
+    bind:this={terminalRef}
+    term={snapshot.terminal}
+    lines={termLines}
+    pending={termPending}
+    onInput={(text) => void terminal.setInput(text).catch(() => {})}
+    onFocus={() => void termDo(() => terminal.toggleFocus())}
+    onScrollback={(bytes) => void termDo(() => terminal.setScrollback(bytes))}
+    onClear={() => void termDo(() => terminal.clearBuffer())}
+  />
+
   <nav class="fkeys" aria-label="function keys">
     {#each fkeys as [key, name]}
       <span class="fkey"><b>{key}</b> {name}</span>
@@ -1318,24 +1479,6 @@
     </div>
   {/if}
 
-  <!-- Executable output modal (§5.5). Independent of the op chain above; the
-       Phase-2 terminal (Esc curtain) replaces this pane. -->
-  {#if execView}
-    <div class="overlay" role="presentation">
-      <div class="dialog exec">
-        <h2>{execView.done ? `Finished — exit ${execView.code}` : "Running…"}</h2>
-        <pre class="exec-output">{execView.lines.join("\n") || "…"}</pre>
-        <div class="buttons">
-          {#if execView.done}
-            <button onclick={() => (execView = null)}>Close</button>
-          {:else}
-            <button onclick={() => void cancelExec()}>Cancel</button>
-          {/if}
-        </div>
-      </div>
-    </div>
-  {/if}
-
   <!-- The embedded viewer / editor (§5.5). Full-window over the panels, the way
        FAR's do — only one is ever open. Both are pure renderers: every row and
        every document fact comes from the core. -->
@@ -1398,6 +1541,11 @@
     min-height: 0;
     background: var(--border);
   }
+  /* The Esc curtain (§6): the panels are drawn aside and the terminal, which is
+     flex:1 at that size, takes the whole window. */
+  .panels.hidden {
+    display: none;
+  }
 
   .panel {
     display: flex;
@@ -1414,6 +1562,13 @@
   }
   .panel.active {
     border-top-color: var(--accent);
+  }
+  /* While the prompt owns the keyboard its top border carries the accent, so the
+     active panel dims its own — exactly one surface should read as focused. The
+     panel stays *active* (it still decides the terminal's cwd and where
+     Ctrl+Enter takes names from); it just isn't where the keys are going. */
+  .panel.active.dimmed {
+    border-top-color: color-mix(in srgb, var(--accent) 35%, transparent);
   }
 
   .panel-head,
@@ -1720,24 +1875,4 @@
     color: var(--fg-dim);
   }
 
-  /* Executable output modal (§5.5). Wider, with a scrollable monospace pane. */
-  .dialog.exec {
-    min-width: 520px;
-    max-width: 80vw;
-  }
-  .exec-output {
-    max-height: 50vh;
-    margin: 0 0 12px;
-    padding: 8px;
-    overflow: auto;
-    font-family: inherit;
-    font-size: 12px;
-    line-height: 1.4;
-    white-space: pre-wrap;
-    word-break: break-word;
-    color: var(--fg);
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-  }
 </style>

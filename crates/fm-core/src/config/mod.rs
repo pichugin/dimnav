@@ -91,6 +91,11 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         action: action.to_string(),
         keys: keys.iter().map(|k| k.to_string()).collect(),
     };
+    let terminal = |action: &str, keys: &[&str]| KeyBinding {
+        context: "terminal".to_string(),
+        action: action.to_string(),
+        keys: keys.iter().map(|k| k.to_string()).collect(),
+    };
     vec![
         // Cursor motion (§5.2).
         bind("cursor.up", &["ArrowUp"]),
@@ -134,6 +139,36 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         bind("panel.view_2", &["Ctrl+2"]),
         bind("panel.view_3", &["Ctrl+3"]),
         bind("panel.view_detailed", &["Ctrl+4"]),
+        // --- Terminal, reachable from the panels (§5.7) ----------------------
+        // A chord normally carries no explicit `Shift` for a printable key, since
+        // the shift is baked into the character (`*` is reported as `*`). That
+        // does not survive a second modifier: macOS reports the *unshifted*
+        // character while Command is held, so Cmd+Shift+T would be
+        // indistinguishable from Cmd+T. With any non-shift modifier present the
+        // frontend therefore spells `Shift` out and lower-cases the letter —
+        // hence `Meta+Shift+t` rather than `Meta+T`.
+        bind("terminal.focus", &["Meta+t"]),
+        bind("terminal.toggle_half", &["Meta+Shift+t"]),
+        // The Esc curtain (§6): panels aside, full terminal, and back.
+        bind("terminal.curtain", &["Escape"]),
+        // Append the name under the cursor to the command line without leaving
+        // the panel, so repeated presses build a multi-file command (§5.7).
+        bind("terminal.insert_name", &["Ctrl+Enter"]),
+        // --- Terminal prompt (§5.7) -------------------------------------------
+        // Anything not bound here is text the user is typing and falls through
+        // to the input, exactly as unbound keys do in the editor.
+        terminal("terminal.run", &["Enter"]),
+        terminal("terminal.blur", &["Meta+t"]),
+        terminal("terminal.toggle_half", &["Meta+Shift+t"]),
+        terminal("terminal.curtain", &["Escape"]),
+        // Interrupts a running command; with nothing running it clears the
+        // prompt — what a shell does, and what the user asked for.
+        terminal("terminal.interrupt", &["Ctrl+c"]),
+        terminal("terminal.history_prev", &["ArrowUp"]),
+        terminal("terminal.history_next", &["ArrowDown"]),
+        terminal("terminal.scroll_up", &["PageUp"]),
+        terminal("terminal.scroll_down", &["PageDown"]),
+        terminal("terminal.clear_buffer", &["Ctrl+l"]),
         // --- Embedded viewer (§5.5) -----------------------------------------
         // FAR's assignments, with one deliberate choice: F4 toggles hex (as it
         // does in FAR's viewer) and F6 does the view↔edit swap, so F4 never

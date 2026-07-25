@@ -145,8 +145,53 @@ export const commands = {
 	 *  whatever the frontend needs to render (SPEC §3).
 	 */
 	openEntry: (panel: PanelId, action: OpenAction) => typedError<OpenOutcome, string>(__TAURI_INVOKE("open_entry", { panel, action })),
-	/**  Kill the executable currently running in the output modal, if any (§5.5). */
-	cancelExec: () => typedError<null, string>(__TAURI_INVOKE("cancel_exec")),
+	/**
+	 *  Cmd+T: move the keyboard to the prompt, or hand it back to the panel that is
+	 *  still marked active (§5.7).
+	 */
+	terminalToggleFocus: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("terminal_toggle_focus")),
+	/**
+	 *  Cmd+Shift+T: expand the pane to the bottom half of the window, or collapse it
+	 *  back to the bare command line (§5.7).
+	 */
+	terminalToggleHalf: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("terminal_toggle_half")),
+	/**  Esc: draw the panels aside to reveal the full terminal, and back (§6). */
+	terminalToggleCurtain: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("terminal_toggle_curtain")),
+	/**
+	 *  Mirror the text being typed at the prompt. Returns nothing: this is an echo
+	 *  of what the frontend already shows, and re-rendering from it would fight the
+	 *  caret (see `TerminalState::input_rev`).
+	 */
+	terminalSetInput: (text: string) => typedError<null, string>(__TAURI_INVOKE("terminal_set_input", { text })),
+	/**
+	 *  Enter at the prompt. The core decides what the line means; a `cd` becomes a
+	 *  panel navigation, `clear` empties the buffer, and anything else is spawned.
+	 */
+	terminalRun: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("terminal_run")),
+	/**
+	 *  Ctrl+C: interrupt the running command, or — with nothing running — clear the
+	 *  prompt (§5.7).
+	 */
+	terminalInterruptOrClear: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("terminal_interrupt_or_clear")),
+	/**  Up / Down at the prompt: recall a previous command (§5.7). */
+	terminalHistory: (dir: HistoryDir) => typedError<AppSnapshot, string>(__TAURI_INVOKE("terminal_history", { dir })),
+	/**
+	 *  Ctrl+Enter: append the name under `panel`'s cursor to the command line,
+	 *  shell-quoted, without the panel losing focus (§5.7).
+	 */
+	terminalInsertName: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("terminal_insert_name", { panel })),
+	/**
+	 *  Re-cap the scrollback from the control in the corner of the expanded pane,
+	 *  and persist the choice (§5.7 / §7).
+	 */
+	terminalSetScrollback: (bytes: number) => typedError<AppSnapshot, string>(__TAURI_INVOKE("terminal_set_scrollback", { bytes })),
+	/**  Empty the scrollback (Ctrl+L, or the button in the corner). */
+	terminalClearBuffer: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("terminal_clear_buffer")),
+	/**
+	 *  The whole scrollback, for the frontend's initial sync and any re-sync (on
+	 *  expand, or after the cap changes).
+	 */
+	terminalBuffer: () => typedError<TerminalBuffer, string>(__TAURI_INVOKE("terminal_buffer")),
 	/**
 	 *  Report the viewer's visible geometry in rows and characters, the same way the
 	 *  panels report theirs: the frontend owns pixels, the core owns what they mean.
@@ -215,13 +260,13 @@ export const commands = {
 /** Events */
 export const events = {
 	configChangedEvent: makeEvent<ConfigChangedEvent>("config-changed-event"),
-	execDoneEvent: makeEvent<ExecDoneEvent>("exec-done-event"),
-	execOutputEvent: makeEvent<ExecOutputEvent>("exec-output-event"),
 	opCollisionEvent: makeEvent<OpCollisionEvent>("op-collision-event"),
 	opCompleteEvent: makeEvent<OpCompleteEvent>("op-complete-event"),
 	opErrorEvent: makeEvent<OpErrorEvent>("op-error-event"),
 	opProgressEvent: makeEvent<OpProgressEvent>("op-progress-event"),
 	panelChangedEvent: makeEvent<PanelChangedEvent>("panel-changed-event"),
+	terminalChunkEvent: makeEvent<TerminalChunkEvent>("terminal-chunk-event"),
+	terminalStateEvent: makeEvent<TerminalStateEvent>("terminal-state-event"),
 };
 
 /* Types */
@@ -239,6 +284,12 @@ export type AppSnapshot = {
 	 *  (§5.4a). The frontend renders the checkbox from this.
 	 */
 	trash_default: boolean,
+	/**
+	 *  The command line's state (§5.7). Rides along on every snapshot so the
+	 *  terminal row re-renders in lockstep with the panels — in particular its
+	 *  `cwd`, which follows the active panel.
+	 */
+	terminal: TerminalState,
 };
 
 /**
@@ -276,9 +327,13 @@ export type Config = {
 	left_panel?: PanelPrefs,
 	right_panel?: PanelPrefs,
 	viewer?: ViewerPrefs,
+	terminal?: TerminalPrefs,
 	/**
 	 *  File-type → external-application map (§5.5). Empty by default, so every
 	 *  file opens with the system default until the user edits the TOML.
+	 * 
+	 *  Stays **last**: it serializes as an array-of-tables, and TOML rejects any
+	 *  plain value or table emitted after one.
 	 */
 	associations?: FileAssociation[],
 };
@@ -375,33 +430,6 @@ export type Eol = "lf" | "crlf" | "cr";
 export type ErrorResolution = "retry" | "skip" | "skip_all" | "cancel" | "elevate";
 
 /**
- *  A run started by Enter-on-executable has finished (§5.5). `code` is the
- *  process exit code, or `-1` when it was killed / had no code.
- */
-export type ExecDone = {
-	code: number,
-	summary: string,
-};
-
-/**  A running executable finished (§5.5). */
-export type ExecDoneEvent = ExecDone;
-
-/**
- *  One line of output from a running executable (§5.5 / §5.7). Phase 1 renders
- *  these into a simple output modal; Phase 2 routes the same stream into the
- *  embedded terminal (the `plugin::ExecutionSink` seam) without changing callers.
- */
-export type ExecOutput = {
-	line: string,
-};
-
-/**
- *  One line of stdout/stderr from a running executable (Enter-on-executable,
- *  §5.5). Phase 1 appends these to the output modal.
- */
-export type ExecOutputEvent = ExecOutput;
-
-/**
  *  One file-type → handler mapping (§5.5 / §7). Associates a set of extensions
  *  with what should happen for each action. Matched case-insensitively on the
  *  entry's extension, no leading dot (e.g. `"md"`).
@@ -428,6 +456,13 @@ export type FileAssociation = {
  *  or a percentage through the file.
  */
 export type GotoTarget = { kind: "line"; value: number } | { kind: "offset"; value: number } | { kind: "percent"; value: number };
+
+/**  Direction for command-history recall (Up / Down at the prompt). */
+export type HistoryDir = 
+/**  Older — what Up does. */
+"prev" | 
+/**  Newer, ending back at the line the user was typing. */
+"next";
 
 /**
  *  One keybinding: an action id (e.g. `"cursor.down"`) and the key chords bound
@@ -607,6 +642,145 @@ export type SearchDirection = "forward" | "backward";
 
 /**  Sort order. Folders-first-by-name is the default (§5.8). */
 export type SortMode = "name_folders_first" | "type_name" | "size" | "date";
+
+/**  The whole scrollback, pulled on expand / on mount / after a cap change. */
+export type TerminalBuffer = {
+	lines: string[],
+	pending: string,
+};
+
+/**
+ *  An incremental scrollback update.
+ * 
+ *  The core owns the buffer and its eviction policy; this is the delta that
+ *  keeps the frontend's mirror exact. Lines rather than bytes, deliberately — a
+ *  byte count would be unusable in a frontend that indexes strings in UTF-16
+ *  units.
+ * 
+ *  **Apply it in this order — append, then drop:**
+ * 
+ *  ```text
+ *  lines   = lines.concat(chunk.lines).slice(chunk.dropped)
+ *  pending = chunk.pending
+ *  ```
+ * 
+ *  The order is load-bearing, not stylistic. The core appends and *then* trims,
+ *  so a single large append can evict lines it just added — feed a 3000-line
+ *  burst into a 2 KB buffer and `dropped` exceeds everything the mirror held
+ *  beforehand. Dropping first would clamp at zero and leak the surplus, leaving
+ *  the mirror permanently longer than the buffer it mirrors.
+ */
+export type TerminalChunk = {
+	/**  Lines completed by this append (no trailing newline). */
+	lines: string[],
+	/**
+	 *  The still-incomplete trailing line; replaces whatever partial the
+	 *  frontend was holding.
+	 */
+	pending: string,
+	/**
+	 *  Leading lines evicted to stay under the byte cap, counted **after** this
+	 *  append — so it can exceed the mirror's previous length.
+	 */
+	dropped: number,
+};
+
+/**
+ *  Fresh output from the running command (§5.7). Carries a *line delta* — the
+ *  lines completed, the new partial tail, and how many old lines the core
+ *  evicted — so the frontend's mirror stays exact without knowing the eviction
+ *  policy.
+ */
+export type TerminalChunkEvent = TerminalChunk;
+
+/**
+ *  Embedded-terminal preferences (§7). The scrollback cap is adjustable from the
+ *  corner of the expanded pane, and the pane's size is remembered across
+ *  restarts the way the panels remember their view state (§5.8).
+ */
+export type TerminalPrefs = {
+	/**  Scrollback cap in bytes — 1 MiB by default (§5.7). */
+	scrollback_bytes?: number,
+	/**
+	 *  Shell used to run commands. `None` means `$SHELL`, falling back to
+	 *  `/bin/sh`.
+	 */
+	shell?: string | null,
+	/**
+	 *  The pane size to restore on launch. `Full` is deliberately not persisted
+	 *  — the Esc curtain is a transient look, not a startup state.
+	 */
+	size?: TerminalSize,
+};
+
+/**
+ *  How much room the terminal occupies. Three sizes, two toggles: Cmd+Shift+T
+ *  flips `Collapsed` ↔ `Half`, and Esc draws the panels aside as a curtain over
+ *  the `Full` terminal (§6) and back again.
+ */
+export type TerminalSize = 
+/**  Just the command line, directly under the panel footers. */
+"collapsed" | 
+/**  Bottom half of the window: output pane above, command line pinned below. */
+"half" | 
+/**  Panels hidden entirely — the Esc curtain. */
+"full";
+
+/**  The command line's full state — everything the prompt row renders. */
+export type TerminalState = {
+	/**
+	 *  The text in the prompt. Survives losing focus: it is core state, not a
+	 *  property of the focused widget (§5.7).
+	 */
+	input: string,
+	/**
+	 *  Bumped **only** when the core itself rewrites `input` (history recall,
+	 *  Ctrl+Enter insertion, clear, run). The frontend re-seeds its `<input>`
+	 *  element on a change and otherwise leaves the user's typing alone, so a
+	 *  snapshot arriving mid-keystroke can never clobber it.
+	 */
+	input_rev: number,
+	/**
+	 *  Working directory the next command runs in — the active panel's directory
+	 *  (§8 Phase 2: the terminal tracks the active panel).
+	 */
+	cwd: string,
+	size: TerminalSize,
+	/**  Whether the prompt owns the keyboard (Cmd+T). Drives the accent border. */
+	focused: boolean,
+	status: TerminalStatus,
+	/**  The command line currently executing, if any. */
+	running: string | null,
+	/**
+	 *  Scrollback cap in bytes, configurable from the expanded pane (1 MiB
+	 *  default, §5.7).
+	 */
+	scrollback_bytes: number,
+};
+
+/**
+ *  The command line's state changed from the backend rather than from a command
+ *  the frontend issued — i.e. a run finished, so the indicator must change
+ *  colour (§5.7).
+ */
+export type TerminalStateEvent = TerminalState;
+
+/**
+ *  What the run-status indicator at the right edge of the command line shows.
+ * 
+ *  `Ok`/`Error` are the *last* run's verdict and decay back to `Idle` as soon as
+ *  the user touches any control again, so a stale green dot never masquerades as
+ *  a fresh result.
+ */
+export type TerminalStatus = 
+/**  Nothing has run since the user last did something — grey, barely visible. */
+"idle" | 
+/**  A command is running — yellow, flashing. */
+"running" | 
+/**  Last run exited 0 and wrote nothing to stderr — green. */
+"ok" | 
+/**  Last run exited non-zero or wrote to stderr — red. */
+"error";
 
 /**
  *  Character encoding of a text file. Detected from a BOM or by sniffing;

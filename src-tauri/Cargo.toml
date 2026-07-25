@@ -38,3 +38,9 @@ tauri-specta = { workspace = true }
 
 # The platform-agnostic core. This is the ONLY place Tauri and fm-core meet.
 fm-core = { path = "../crates/fm-core" }
+
+# Ctrl+C in the terminal signals the command's whole process group, so the
+# program the shell started dies too and not just the shell (§5.7). Unix-only;
+# gated so a future Windows build never sees it.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

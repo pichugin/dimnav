@@ -986,6 +986,7 @@ name = "file-manager"
 version = "0.1.0"
 dependencies = [
  "fm-core",
+ "libc",
  "serde",
  "serde_json",
  "specta",
