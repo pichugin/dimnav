@@ -429,11 +429,28 @@
     return `${attrs}  ${owner}  ${size}  mod ${fmtDateTime(e.modified)}  crt ${fmtDateTime(e.created)}${link}`;
   }
 
+  // Mouse: a click anywhere in a panel — its padding, its header, a row — is a
+  // request for the keyboard to be in that panel. Always reported, never guarded
+  // on `snapshot.active`: the panel may already be active and still not hold the
+  // keyboard, because the terminal prompt has it (§5.7).
+  async function activatePanel(side: PanelId) {
+    try {
+      snapshot = await nav.setActivePanel(side);
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
   // Mouse: single-click focuses the clicked entry (and activates its panel). The
   // core owns the cursor index; we just report the clicked global index.
+  //
+  // The activation is unconditional even when the panel is already active: it is
+  // also what takes the keyboard back from the terminal prompt (§5.7), and the
+  // core is the one that decides that. Skipping the call when only the *panel*
+  // looks unchanged would be the frontend quietly overruling it.
   async function focusEntry(side: PanelId, index: number) {
     try {
-      if (snapshot.active !== side) snapshot = await nav.setActivePanel(side);
+      snapshot = await nav.setActivePanel(side);
       snapshot = await nav.setCursor(side, index);
     } catch (err) {
       status = `error: ${errMessage(err)}`;
@@ -444,7 +461,7 @@
   // it (dir / symlink / `..`) or open a file with the system default (§5.5).
   async function openEntry(side: PanelId, index: number) {
     try {
-      if (snapshot.active !== side) snapshot = await nav.setActivePanel(side);
+      snapshot = await nav.setActivePanel(side);
       snapshot = await nav.setCursor(side, index);
       await activateFocused(side);
     } catch (err) {
@@ -1474,7 +1491,7 @@
         class="panel"
         class:active={snapshot.active === side}
         class:dimmed={snapshot.terminal.focused}
-        onclick={() => (snapshot.active !== side ? nav.setActivePanel(side).then((s) => (snapshot = s)) : null)}
+        onclick={() => void activatePanel(side)}
         role="presentation"
       >
         <header class="panel-head">

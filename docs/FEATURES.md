@@ -83,6 +83,12 @@ Section references are to `docs/SPEC.md`.
       when the prompt owns the keyboard
 - [x] **Cmd+T** focuses the prompt; Cmd+T again hands the keyboard back to the
       panel that is still active
+- [x] **Clicking a panel hands the keyboard back** — including the panel that is
+      *already* active, which is the whole point: a panel can be the active one
+      and still not hold the keyboard, because the prompt has it. The click is
+      always reported to the core rather than being skipped when only `active`
+      looks unchanged, so `set_active_panel` stays the one place that decides
+      what reaching for a panel means
 - [x] **Cmd+Shift+T** expands the pane to the bottom half of the window and shows
       accumulated output; the panels shrink to fit rather than being covered
 - [x] Expanded pane stays open when focus returns to the panels — browse, run,
