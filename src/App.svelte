@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { nav, ops, open, viewer, editor, terminal, events } from "./lib/ipc";
+  import { nav, ops, open, viewer, editor, terminal, help, events } from "./lib/ipc";
   import type {
     AppSnapshot,
     EditDoc,
     Entry,
     ErrorResolution,
     GotoTarget,
+    HelpBook,
     HistoryDir,
     KeyBinding,
     Motion,
@@ -126,12 +127,39 @@
   let saveConflict = $state<string | null>(null);
   // Esc on a modified buffer, awaiting Save / Discard / Cancel.
   let unsavedPrompt = $state(false);
+  let editorRef = $state<Editor | null>(null);
 
-  // Which keymap context owns the keyboard right now (§6). The embedded
-  // surfaces win over the terminal: the viewer/editor cover the whole window, so
-  // while one is open it is the only thing the keyboard can sensibly reach.
+  // --- Help (F1, §6) --------------------------------------------------------
+  // The whole book comes from the core already filtered — topics, the shortcut
+  // list derived from the live keymap, and the search matching. Nothing here
+  // decides what help says, only which topic is showing and where it is scrolled.
+  let helpOpen = $state(false);
+  let helpTopic = $state(0);
+  let helpQuery = $state("");
+  let helpBook = $state<HelpBook | null>(null);
+  let helpContentEl = $state<HTMLElement | null>(null);
+
+  // Every modal that owns the keyboard until it is answered. F1 defers to these:
+  // they are questions, and stacking help on top of one strands the answer.
+  const modalUp = $derived(
+    !!(destPrompt || textPrompt || activeOp || prompt || deleteConfirm || saveConflict || unsavedPrompt),
+  );
+
+  // Which keymap context owns the keyboard right now (§6). Help wins outright —
+  // it is reachable from every surface, so while it is up nothing underneath it
+  // should see a key. Otherwise the embedded surfaces win over the terminal: the
+  // viewer/editor cover the whole window, so while one is open it is the only
+  // thing the keyboard can sensibly reach.
   const keyContext = $derived(
-    editorDoc ? "editor" : viewerPage ? "viewer" : snapshot.terminal.focused ? "terminal" : "panels",
+    helpOpen
+      ? "help"
+      : editorDoc
+        ? "editor"
+        : viewerPage
+          ? "viewer"
+          : snapshot.terminal.focused
+            ? "terminal"
+            : "panels",
   );
 
   // context -> chord string -> action id, built from the core-provided keymap.
@@ -926,6 +954,75 @@
     return false;
   }
 
+  // --- Help (F1, §6) --------------------------------------------------------
+
+  /**
+   * Fetch the book for the current query. The core does the filtering; this only
+   * drops responses that arrived out of order, so fast typing can't leave the
+   * list showing the results of a prefix the user has already moved past.
+   */
+  async function loadHelp() {
+    const q = helpQuery;
+    try {
+      const book = await help.book(q);
+      if (helpOpen && helpQuery === q) helpBook = book;
+    } catch (err) {
+      status = `error: ${String(err)}`;
+    }
+  }
+
+  async function openHelp() {
+    helpOpen = true;
+    helpTopic = 0;
+    helpQuery = "";
+    await loadHelp();
+  }
+
+  function closeHelp() {
+    helpOpen = false;
+    helpQuery = "";
+    // Hand the DOM focus back to whoever had it. The core's idea of who owns the
+    // keyboard never changed while help was up, so nothing else will do this —
+    // skip it and the editor or the prompt goes quietly dead.
+    tick().then(() => {
+      if (editorDoc) editorRef?.refocus();
+      else if (snapshot.terminal.focused) terminalRef?.focusInput();
+    });
+  }
+
+  /** Scroll the topic pane. The list is short, so this stays view-side state. */
+  function scrollHelp(amount: number) {
+    helpContentEl?.scrollBy({ top: amount });
+  }
+
+  function handleHelpKey(action: string): boolean {
+    const count = helpBook?.topics.length ?? 0;
+    switch (action) {
+      case "help.close":
+        closeHelp();
+        return true;
+      case "help.next_topic":
+        if (count) helpTopic = (helpTopic + 1) % count;
+        return true;
+      case "help.prev_topic":
+        if (count) helpTopic = (helpTopic - 1 + count) % count;
+        return true;
+      case "help.scroll_up":
+        scrollHelp(-ROW_H * 3);
+        return true;
+      case "help.scroll_down":
+        scrollHelp(ROW_H * 3);
+        return true;
+      case "help.page_up":
+        scrollHelp(-(helpContentEl?.clientHeight ?? 0) * 0.9);
+        return true;
+      case "help.page_down":
+        scrollHelp((helpContentEl?.clientHeight ?? 0) * 0.9);
+        return true;
+    }
+    return false;
+  }
+
   // Keys for the two dialogs the editor can raise: a save conflict and an
   // unsaved-changes confirmation.
   function handleOverlayDialogKey(e: KeyboardEvent): boolean {
@@ -987,6 +1084,23 @@
 
   async function onKeydown(e: KeyboardEvent) {
     shiftHeld = e.shiftKey;
+    // Help owns the keyboard outright while it is up — it can be opened over any
+    // surface, so nothing underneath may act on a key. Unbound keys fall through
+    // untouched to the focused search field, exactly as they do at the terminal
+    // prompt; that is what lets the user simply type to filter.
+    if (helpOpen) {
+      const bound = keymaps.help?.[chord(e)];
+      if (bound && handleHelpKey(bound)) e.preventDefault();
+      return;
+    }
+    // F1 from any surface (§6). Handled here rather than in each surface's own
+    // handler so viewer/editor/terminal need to know nothing about help. The
+    // modals are the deliberate exception: they are questions awaiting an answer.
+    if (!modalUp && keymaps[keyContext]?.[chord(e)] === "help.open") {
+      e.preventDefault();
+      void openHelp();
+      return;
+    }
     // Text prompts (destination, mkdir, rename, search, goto) own the keyboard
     // via their focused <input>; let them be.
     if (destPrompt || textPrompt) return;
@@ -1208,6 +1322,7 @@
   // Function-key hints. While Shift is held, F6 advertises its shifted action
   // (Rename) instead of Move, so the bar reflects what the next keystroke does.
   const fkeys = $derived<[string, string][]>([
+    ["F1", "Help"],
     ["F3", "View"],
     ["F4", "Edit"],
     ["F5", "Copy"],
@@ -1483,7 +1598,13 @@
        FAR's do — only one is ever open. Both are pure renderers: every row and
        every document fact comes from the core. -->
   {#if editorDoc}
-    <Editor doc={editorDoc} bind:text={editorText} dirty={editorDirty} message={overlayMessage} />
+    <Editor
+      bind:this={editorRef}
+      doc={editorDoc}
+      bind:text={editorText}
+      dirty={editorDirty}
+      message={overlayMessage}
+    />
   {:else if viewerPage}
     <Viewer
       page={viewerPage}
@@ -1516,6 +1637,91 @@
           <button onclick={() => void closeEditor(true)}><u>D</u>iscard</button>
           <button onclick={() => (unsavedPrompt = false)}><u>C</u>ancel</button>
         </div>
+      </div>
+    </div>
+  {/if}
+
+  <!-- Help (F1, §6). Reachable from every surface, so it sits above them all.
+       Every string below comes from the core's help book — this block chooses
+       layout and nothing else. -->
+  {#if helpOpen && helpBook}
+    {@const topic = helpBook.topics[helpTopic]}
+    <div class="overlay help-overlay" role="presentation">
+      <div class="help">
+        <header class="bar">
+          <span class="name">Help</span>
+          <span class="tags"><span class="tag">{topic?.title ?? ""}</span></span>
+        </header>
+
+        <div class="help-body">
+          <nav class="topics" aria-label="Help topics">
+            {#each helpBook.topics as t, i (t.id)}
+              <button class="topic" class:active={i === helpTopic} onclick={() => (helpTopic = i)}>
+                {t.title}
+              </button>
+            {/each}
+          </nav>
+
+          <section class="topic-content" bind:this={helpContentEl}>
+            {#if topic?.body.kind === "about"}
+              {@const about = topic.body.value}
+              <h1 class="about-name">{about.app.name}</h1>
+              <p class="about-desc">{about.app.description}</p>
+              <dl class="about-lines">
+                {#each about.lines as line (line.label)}
+                  <dt>{line.label}</dt>
+                  <dd>{line.value}</dd>
+                {/each}
+              </dl>
+            {:else if topic?.body.kind === "shortcuts"}
+              {@const sc = topic.body.value}
+              <div class="search">
+                <!-- The same input hygiene the terminal prompt uses: without it
+                     WebKit floats an autofill dropdown over the first rows. -->
+                <input
+                  type="text"
+                  placeholder="Filter shortcuts…"
+                  spellcheck="false"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  bind:value={helpQuery}
+                  oninput={() => void loadHelp()}
+                  use:autofocus
+                />
+                <span class="match-count">{sc.match_count} of {sc.total_count}</span>
+              </div>
+
+              {#each sc.sections as section (section.context)}
+                <h2 class="section">{section.title}</h2>
+                {#each section.groups as group (group.category)}
+                  <h3 class="group">{group.title}</h3>
+                  <ul class="shortcuts">
+                    {#each group.items as item (item.action)}
+                      <li>
+                        <span class="keys">
+                          {#each item.keys as k (k)}<b>{k}</b>{/each}
+                        </span>
+                        <span class="what">
+                          <span class="title">{item.title}</span>
+                          {#if item.description}
+                            <span class="desc">{item.description}</span>
+                          {/if}
+                        </span>
+                        <span class="action-id">{item.action}</span>
+                      </li>
+                    {/each}
+                  </ul>
+                {/each}
+              {:else}
+                <p class="no-matches">No shortcuts match “{sc.query}”.</p>
+              {/each}
+            {/if}
+          </section>
+        </div>
+
+        <footer class="bar status">
+          <span class="hint">Tab / ⇧Tab topic · ↑↓ PgUp/PgDn scroll · Esc close</span>
+        </footer>
       </div>
     </div>
   {/if}
@@ -1768,6 +1974,11 @@
     background: rgba(0, 0, 0, 0.45);
     z-index: 10;
   }
+  /* Help is reachable from every surface, so it outranks the viewer/editor
+     (z-index 5) and the op dialogs (10) alike. */
+  .overlay.help-overlay {
+    z-index: 20;
+  }
   .dialog {
     min-width: 360px;
     max-width: 70vw;
@@ -1872,6 +2083,218 @@
   }
   .count {
     margin: 0 0 12px;
+    color: var(--fg-dim);
+  }
+
+  /* --- Help (F1, §6) ---
+     Large enough to read a long shortcut list without paging, but still a panel
+     over the app rather than a replacement for it. */
+  .help {
+    display: flex;
+    flex-direction: column;
+    width: 88vw;
+    height: 86vh;
+    max-width: 1100px;
+    background: var(--bg-alt);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    overflow: hidden;
+  }
+  /* Same chrome as the viewer/editor surfaces. */
+  .help .bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 10px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    overflow: hidden;
+    flex: none;
+  }
+  .help .bar.status {
+    border-bottom: none;
+    border-top: 1px solid var(--border);
+    color: var(--fg-dim);
+    font-size: 11px;
+  }
+  .help .tags {
+    display: flex;
+    gap: 6px;
+    flex: none;
+  }
+  .help .tag {
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--fg-dim);
+    font-size: 11px;
+  }
+
+  .help-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+  }
+
+  /* Topic rail. Tab cycles it; clicking is the mouse equivalent. */
+  .topics {
+    display: flex;
+    flex-direction: column;
+    flex: none;
+    width: 160px;
+    padding: 8px 0;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+    overflow-y: auto;
+  }
+  .topic {
+    padding: 5px 12px;
+    text-align: left;
+    font: inherit;
+    color: var(--fg-dim);
+    background: none;
+    border: none;
+    border-left: 2px solid transparent;
+    cursor: pointer;
+  }
+  .topic:hover {
+    color: var(--fg);
+  }
+  .topic.active {
+    color: var(--fg);
+    border-left-color: var(--accent);
+    background: var(--bg-alt);
+  }
+
+  .topic-content {
+    flex: 1;
+    min-width: 0;
+    padding: 14px 18px;
+    overflow-y: auto;
+    /* Not `smooth`: held arrow keys would queue animations and lag behind. */
+  }
+
+  /* About */
+  .about-name {
+    margin: 0 0 4px;
+    font-size: 18px;
+    font-weight: 600;
+  }
+  .about-desc {
+    margin: 0 0 16px;
+    color: var(--fg-dim);
+  }
+  .about-lines {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 16px;
+    margin: 0;
+  }
+  .about-lines dt {
+    color: var(--fg-dim);
+  }
+  .about-lines dd {
+    margin: 0;
+  }
+
+  /* Shortcuts */
+  .search {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    position: sticky;
+    /* The negative margins cancel the pane's padding so the field spans the full
+       width and starts flush with the scrollport, where `top: 0` then pins it —
+       otherwise rows would scroll visibly past its edges. */
+    top: 0;
+    margin: -14px -18px 12px;
+    padding: 14px 18px 10px;
+    background: var(--bg-alt);
+    border-bottom: 1px solid var(--border);
+  }
+  .search input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    font: inherit;
+    color: var(--fg);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+  .search input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+  .match-count {
+    flex: none;
+    color: var(--fg-dim);
+    font-size: 11px;
+  }
+
+  .section {
+    margin: 18px 0 6px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .section:first-of-type {
+    margin-top: 0;
+  }
+  .group {
+    margin: 12px 0 4px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--fg-dim);
+  }
+  .shortcuts {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .shortcuts li {
+    display: grid;
+    grid-template-columns: 120px 1fr max-content;
+    gap: 12px;
+    align-items: baseline;
+    padding: 2px 0;
+  }
+  .shortcuts li:hover {
+    background: var(--bg);
+  }
+  .keys {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  /* Same weight the viewer's F-key legend uses. */
+  .keys b {
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .what {
+    min-width: 0;
+  }
+  .what .title {
+    color: var(--fg);
+  }
+  .what .desc {
+    color: var(--fg-dim);
+  }
+  /* The action id is what a remapped config.toml will key off, so it is here —
+     but quietly, since most readers only want the key and the label. */
+  .action-id {
+    color: var(--fg-dim);
+    font-size: 11px;
+    opacity: 0.55;
+  }
+  .no-matches {
+    margin: 0;
     color: var(--fg-dim);
   }
 

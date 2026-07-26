@@ -70,11 +70,15 @@ pub fn save_to(path: &Path, config: &Config) -> Result<(), String> {
 /// the character (`*` is `Shift+8` but reports as `"*"`). Remapping, persistence,
 /// and conflict detection are a later slice.
 ///
-/// Bindings are scoped by **context** — `"panels"`, `"viewer"`, `"editor"` —
-/// because the same F-key means different things depending on which surface owns
-/// the keyboard (F4 edits the file under the cursor from the panels, and toggles
-/// hex inside the viewer). The frontend consults the context of whichever
-/// surface is on top.
+/// Bindings are scoped by **context** — `"panels"`, `"viewer"`, `"editor"`,
+/// `"terminal"`, `"help"` — because the same F-key means different things
+/// depending on which surface owns the keyboard (F4 edits the file under the
+/// cursor from the panels, and toggles hex inside the viewer). The frontend
+/// consults the context of whichever surface is on top.
+///
+/// Every action id here must also appear in [`crate::actions::catalog`], which
+/// carries the human-readable text the F1 help screen renders. A test enforces
+/// that in both directions.
 pub fn default_keymap() -> Vec<KeyBinding> {
     let bind = |action: &str, keys: &[&str]| KeyBinding {
         context: "panels".to_string(),
@@ -93,6 +97,11 @@ pub fn default_keymap() -> Vec<KeyBinding> {
     };
     let terminal = |action: &str, keys: &[&str]| KeyBinding {
         context: "terminal".to_string(),
+        action: action.to_string(),
+        keys: keys.iter().map(|k| k.to_string()).collect(),
+    };
+    let help = |action: &str, keys: &[&str]| KeyBinding {
+        context: "help".to_string(),
         action: action.to_string(),
         keys: keys.iter().map(|k| k.to_string()).collect(),
     };
@@ -194,6 +203,27 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         editor("editor.save", &["F2"]),
         editor("editor.to_view", &["F6"]),
         editor("editor.close", &["Escape"]),
+        // --- Help (§6) -------------------------------------------------------
+        // F1 is bound in every context, so help is always one key away no matter
+        // which surface owns the keyboard.
+        bind("help.open", &["F1"]),
+        viewer("help.open", &["F1"]),
+        editor("help.open", &["F1"]),
+        terminal("help.open", &["F1"]),
+        // The help popup's own context. `Escape` MUST be declared here: it is
+        // bound in every other context (terminal.curtain, viewer.close,
+        // editor.close), so without this entry closing help would fall through
+        // and yank the terminal curtain instead.
+        help("help.close", &["Escape", "F1", "F10"]),
+        // Tab cycles the topic rail in both directions, wrapping at either end.
+        help("help.next_topic", &["Tab"]),
+        help("help.prev_topic", &["Shift+Tab"]),
+        // Left/Right and Home/End are deliberately left unbound so they keep
+        // moving the caret in the search field.
+        help("help.scroll_up", &["ArrowUp"]),
+        help("help.scroll_down", &["ArrowDown"]),
+        help("help.page_up", &["PageUp"]),
+        help("help.page_down", &["PageDown"]),
     ]
 }
 

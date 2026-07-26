@@ -15,10 +15,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use fm_core::open::{EmbeddedMode, OpenPlan};
 use fm_core::state::AppState;
 use fm_core::types::{
-    AppSnapshot, Config, DeleteRequest, DirListing, EditDoc, EntryKind, ErrorResolution, GotoTarget,
-    HistoryDir, KeyBinding, MediaKind, Motion, NavTarget, OpKind, OpenAction, OpenOutcome,
-    OpRequest, PanelId, Resolution, SaveOutcome, SearchDirection, SortMode, TerminalBuffer,
-    ViewMode, ViewMotion, ViewPage, ViewerMode,
+    AppInfo, AppSnapshot, Config, DeleteRequest, DirListing, EditDoc, EntryKind, ErrorResolution,
+    GotoTarget, HelpBook, HistoryDir, KeyBinding, MediaKind, Motion, NavTarget, OpKind, OpenAction,
+    OpenOutcome, OpRequest, PanelId, Resolution, SaveOutcome, SearchDirection, SortMode,
+    TerminalBuffer, ViewMode, ViewMotion, ViewPage, ViewerMode,
 };
 use fm_core::view::{edit::Docs, Sessions};
 use tauri::{AppHandle, State};
@@ -90,6 +90,27 @@ pub fn get_config(state: State<'_, SharedState>) -> Result<Config, String> {
 #[specta::specta]
 pub fn get_keymap() -> Vec<KeyBinding> {
     fm_core::config::default_keymap()
+}
+
+/// The F1 help book, filtered by `query` (§6). Both the content and the search
+/// matching are the core's: this only supplies the packaging metadata, which is
+/// the one thing `fm-core` cannot know about itself.
+///
+/// `package_info()` resolves to the bundle's `productName` and `version` from
+/// `tauri.conf.json` — the identity a shipped app actually presents — while the
+/// one-line description comes from the crate manifest.
+#[tauri::command]
+#[specta::specta]
+pub fn get_help(app: AppHandle, query: String) -> HelpBook {
+    let pkg = app.package_info();
+    let info = AppInfo {
+        name: pkg.name.clone(),
+        version: pkg.version.to_string(),
+        description: env!("CARGO_PKG_DESCRIPTION").to_string(),
+    };
+    // Same keymap source as `get_keymap`, so help can never disagree with what
+    // the keyboard actually does.
+    fm_core::help::book(&info, &fm_core::config::default_keymap(), &query)
 }
 
 /// List a directory into a structured [`DirListing`] (utility; panels use the

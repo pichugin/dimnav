@@ -20,6 +20,16 @@ export const commands = {
 	 */
 	getKeymap: () => __TAURI_INVOKE<KeyBinding[]>("get_keymap"),
 	/**
+	 *  The F1 help book, filtered by `query` (§6). Both the content and the search
+	 *  matching are the core's: this only supplies the packaging metadata, which is
+	 *  the one thing `fm-core` cannot know about itself.
+	 * 
+	 *  `package_info()` resolves to the bundle's `productName` and `version` from
+	 *  `tauri.conf.json` — the identity a shipped app actually presents — while the
+	 *  one-line description comes from the crate manifest.
+	 */
+	getHelp: (query: string) => __TAURI_INVOKE<HelpBook>("get_help", { query }),
+	/**
 	 *  Load the persisted configuration and populate both panels from it — each panel
 	 *  reopens its last directory with its own view/sort/hidden state (§5.8 / §7),
 	 *  falling back to home when a remembered directory is gone. Call once on boot.
@@ -270,6 +280,24 @@ export const events = {
 };
 
 /* Types */
+/**  The About topic: who the app is, plus a few label/value facts. */
+export type AboutBody = {
+	app: AppInfo,
+	lines: HelpLine[],
+};
+
+/**
+ *  Who this app is, for the About topic. Filled in by the platform adapter from
+ *  its packaging metadata (Cargo / the Tauri bundle config), because the core
+ *  has no packaging of its own to read.
+ */
+export type AppInfo = {
+	/**  Display name, e.g. `"File Manager"` — the product name, not the crate. */
+	name: string,
+	version: string,
+	description: string,
+};
+
 /**
  *  A full snapshot of navigation state — both panels plus which is active. Every
  *  navigation command returns this so the frontend replaces its whole render
@@ -457,6 +485,38 @@ export type FileAssociation = {
  */
 export type GotoTarget = { kind: "line"; value: number } | { kind: "offset"; value: number } | { kind: "percent"; value: number };
 
+/**
+ *  The content of a topic. Tagged the same way as [`OpenOutcome`] so the
+ *  generated TypeScript is a discriminated union the renderer can switch on.
+ */
+export type HelpBody = { kind: "about"; value: AboutBody } | { kind: "shortcuts"; value: ShortcutsBody };
+
+/**
+ *  The whole help book: every topic, already rendered and filtered. The frontend
+ *  picks one to show and renders it — it makes no decisions about content.
+ */
+export type HelpBook = {
+	topics: HelpTopicView[],
+};
+
+/**  One label/value row. */
+export type HelpLine = {
+	label: string,
+	value: string,
+};
+
+/**  One topic, as it appears in the left-hand rail plus the body it renders. */
+export type HelpTopicView = {
+	/**
+	 *  Stable id, e.g. `"about"`. The frontend never switches on it, but it makes
+	 *  the payload self-describing and gives a plugin topic a handle.
+	 */
+	id: string,
+	/**  Label for the topic rail. */
+	title: string,
+	body: HelpBody,
+};
+
 /**  Direction for command-history recall (Up / Down at the prompt). */
 export type HistoryDir = 
 /**  Older — what Up does. */
@@ -470,10 +530,10 @@ export type HistoryDir =
  *  Remapping, persistence, and conflict detection are a later slice.
  * 
  *  `context` scopes the binding to the surface that owns the keyboard —
- *  `"panels"`, `"viewer"`, or `"editor"` — because the same F-key means
- *  different things in each (F4 edits a file from the panels, toggles hex in the
- *  viewer). The frontend groups the keymap by context and consults the one for
- *  whichever surface is on top.
+ *  `"panels"`, `"viewer"`, `"editor"`, `"terminal"`, `"help"` — because the same
+ *  F-key means different things in each (F4 edits a file from the panels,
+ *  toggles hex in the viewer). The frontend groups the keymap by context and
+ *  consults the one for whichever surface is on top.
  */
 export type KeyBinding = {
 	context: string,
@@ -639,6 +699,56 @@ export type SaveOutcome = { kind: "saved" } | { kind: "conflict"; value: string 
 
 /**  Search direction for F7 / Shift+F7. */
 export type SearchDirection = "forward" | "backward";
+
+/**  A run of related shortcuts within a section, e.g. "Cursor motion". */
+export type ShortcutGroup = {
+	category: string,
+	title: string,
+	items: ShortcutItem[],
+};
+
+/**  One shortcut row. */
+export type ShortcutItem = {
+	/**  The action id, e.g. `"op.copy"` — shown small, and searchable. */
+	action: string,
+	/**
+	 *  **Display** chords (`"⌘⇧T"`, `"↑"`, `"Space"`), not the raw chord strings.
+	 *  The renderer never has to know the internal chord format.
+	 */
+	keys: string[],
+	title: string,
+	description: string,
+};
+
+/**
+ *  All shortcuts for one keyboard context (`"panels"`, `"viewer"`, …). The same
+ *  key can mean different things in different contexts, which is exactly why the
+ *  list is sectioned this way rather than flattened.
+ */
+export type ShortcutSection = {
+	/**  The raw context id from the keymap. */
+	context: string,
+	/**  Display heading, e.g. `"Panels"`. */
+	title: string,
+	groups: ShortcutGroup[],
+};
+
+/**  The Shortcuts topic: the live keymap, grouped and filtered. */
+export type ShortcutsBody = {
+	/**
+	 *  Echo of the query these results were produced for, so the renderer can
+	 *  tell a stale response from a current one.
+	 */
+	query: string,
+	/**
+	 *  How many shortcuts survived the filter, and how many exist in total —
+	 *  the "12 of 68" counter.
+	 */
+	match_count: number,
+	total_count: number,
+	/**  One section per keyboard context that has at least one match. */
+	sections: ShortcutSection[],
+};
 
 /**  Sort order. Folders-first-by-name is the default (§5.8). */
 export type SortMode = "name_folders_first" | "type_name" | "size" | "date";

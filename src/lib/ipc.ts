@@ -66,6 +66,17 @@ export type {
   SaveOutcome,
   TextEncoding,
   Eol,
+  // Help (F1) (§6)
+  AppInfo,
+  HelpBook,
+  HelpTopicView,
+  HelpBody,
+  AboutBody,
+  HelpLine,
+  ShortcutsBody,
+  ShortcutSection,
+  ShortcutGroup,
+  ShortcutItem,
 } from "./bindings";
 
 /** Result envelope produced by tauri-specta for `Result`-returning commands. */
@@ -210,4 +221,14 @@ export const editor = {
   /** F6 — drop back to the viewer on the same file. */
   toView: (id: string) => unwrap(commands.editToView(id)),
   close: (id: string) => unwrap(commands.editClose(id)),
+};
+
+/**
+ * Help API (F1, §6). The core assembles every topic — including the shortcut
+ * list, which it derives from the live keymap — and applies the search filter,
+ * so this is one call and the renderer holds no help content of its own.
+ */
+export const help = {
+  /** `query` filters the shortcut list; `""` returns everything. */
+  book: (query: string) => commands.getHelp(query),
 };

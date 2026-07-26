@@ -15,6 +15,35 @@ Section references are to `docs/SPEC.md`.
 
 ## Implemented
 
+### Help popup (§6)
+
+- [x] **F1** opens a large popup over the app, from every surface — panels,
+      viewer, editor, and the focused terminal prompt
+- [x] Topics listed vertically on the left; **Tab** / **Shift+Tab** cycle them,
+      wrapping round at either end. Clicking a topic works too
+- [x] **About** (the default topic): app name, version and description, taken
+      from the Tauri bundle metadata (`productName` / `version`) and the crate
+      manifest — no hand-maintained version string
+- [x] **Shortcuts**: every binding currently in force, sectioned by keyboard
+      context (Panels / Viewer / Editor / Terminal / Help) and grouped by what
+      the action does, each with a title and a short explanation
+- [x] Key chords are rendered the way the F-key bar renders them (`⌘⇧T`, `↑`,
+      `Space`), not as the internal chord strings
+- [x] Quick-search field filters the list across **all** of it — context,
+      category, key chord, action id, title and description. Multiple terms
+      narrow (AND), and symbols are findable by name (`cmd` finds `⌘`)
+- [x] `↑` / `↓` / PgUp / PgDn scroll the topic; `←` / `→` and Home/End are left
+      alone so they still edit the search text
+- [x] **Esc** (or F1 again, or F10) closes, restoring keyboard focus to whatever
+      owned it — including the editor buffer and the terminal prompt
+- [x] The shortcut list is **generated** from the live keymap joined against a
+      core action catalog (`fm-core::actions`), so it cannot drift from the
+      keyboard; a test fails if an action is bound without help text
+- [x] Topics are built against a `HelpTopic` extension point (§6a), so a future
+      plugin-contributed topic is a registry entry rather than a special case
+- [x] Deliberately does **not** open over a file-operation dialog — those are
+      questions awaiting an answer
+
 ### Embedded terminal (§5.7, §8 Phase 2)
 
 - [x] Command line permanently below the panels, under the selected-files footer
@@ -91,7 +120,13 @@ so it could only colour by exit code. The consequences:
 
 - [ ] Theming and transparency, config-driven (§4)
 - [ ] Keybinding remapping and conflict detection (§6) — including the terminal
-      bindings added in this slice
+      bindings added in this slice. `get_keymap` and the F1 help screen both read
+      `default_keymap()` today, so help already renders whatever the keymap says;
+      remapping only has to change that one source for help to follow
+- [ ] Selectable shortcut schemas (§6) — the F1 About topic already reports which
+      schema is applied, currently always "Default"
+- [ ] More help topics (§6) — the `HelpTopic` extension point is in place; only
+      About and Shortcuts ship so far
 - [ ] Symlink target editing (§5.4a)
 - [ ] Config hot-reload (§7, nice-to-have)
 - [ ] Public plugin API and loader (§6a, Phase 5)

@@ -639,10 +639,10 @@ pub enum OpenOutcome {
 /// Remapping, persistence, and conflict detection are a later slice.
 ///
 /// `context` scopes the binding to the surface that owns the keyboard —
-/// `"panels"`, `"viewer"`, or `"editor"` — because the same F-key means
-/// different things in each (F4 edits a file from the panels, toggles hex in the
-/// viewer). The frontend groups the keymap by context and consults the one for
-/// whichever surface is on top.
+/// `"panels"`, `"viewer"`, `"editor"`, `"terminal"`, `"help"` — because the same
+/// F-key means different things in each (F4 edits a file from the panels,
+/// toggles hex in the viewer). The frontend groups the keymap by context and
+/// consults the one for whichever surface is on top.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct KeyBinding {
     pub context: String,
@@ -789,4 +789,106 @@ impl Default for Config {
             associations: Vec::new(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Help (F1) — see `crate::help`
+// ---------------------------------------------------------------------------
+
+/// Who this app is, for the About topic. Filled in by the platform adapter from
+/// its packaging metadata (Cargo / the Tauri bundle config), because the core
+/// has no packaging of its own to read.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct AppInfo {
+    /// Display name, e.g. `"File Manager"` — the product name, not the crate.
+    pub name: String,
+    pub version: String,
+    pub description: String,
+}
+
+/// The whole help book: every topic, already rendered and filtered. The frontend
+/// picks one to show and renders it — it makes no decisions about content.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct HelpBook {
+    pub topics: Vec<HelpTopicView>,
+}
+
+/// One topic, as it appears in the left-hand rail plus the body it renders.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct HelpTopicView {
+    /// Stable id, e.g. `"about"`. The frontend never switches on it, but it makes
+    /// the payload self-describing and gives a plugin topic a handle.
+    pub id: String,
+    /// Label for the topic rail.
+    pub title: String,
+    pub body: HelpBody,
+}
+
+/// The content of a topic. Tagged the same way as [`OpenOutcome`] so the
+/// generated TypeScript is a discriminated union the renderer can switch on.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum HelpBody {
+    About(AboutBody),
+    Shortcuts(ShortcutsBody),
+}
+
+/// The About topic: who the app is, plus a few label/value facts.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct AboutBody {
+    pub app: AppInfo,
+    pub lines: Vec<HelpLine>,
+}
+
+/// One label/value row.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct HelpLine {
+    pub label: String,
+    pub value: String,
+}
+
+/// The Shortcuts topic: the live keymap, grouped and filtered.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ShortcutsBody {
+    /// Echo of the query these results were produced for, so the renderer can
+    /// tell a stale response from a current one.
+    pub query: String,
+    /// How many shortcuts survived the filter, and how many exist in total —
+    /// the "12 of 68" counter.
+    pub match_count: u32,
+    pub total_count: u32,
+    /// One section per keyboard context that has at least one match.
+    pub sections: Vec<ShortcutSection>,
+}
+
+/// All shortcuts for one keyboard context (`"panels"`, `"viewer"`, …). The same
+/// key can mean different things in different contexts, which is exactly why the
+/// list is sectioned this way rather than flattened.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ShortcutSection {
+    /// The raw context id from the keymap.
+    pub context: String,
+    /// Display heading, e.g. `"Panels"`.
+    pub title: String,
+    pub groups: Vec<ShortcutGroup>,
+}
+
+/// A run of related shortcuts within a section, e.g. "Cursor motion".
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ShortcutGroup {
+    pub category: String,
+    pub title: String,
+    pub items: Vec<ShortcutItem>,
+}
+
+/// One shortcut row.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ShortcutItem {
+    /// The action id, e.g. `"op.copy"` — shown small, and searchable.
+    pub action: String,
+    /// **Display** chords (`"⌘⇧T"`, `"↑"`, `"Space"`), not the raw chord strings.
+    /// The renderer never has to know the internal chord format.
+    pub keys: Vec<String>,
+    pub title: String,
+    pub description: String,
 }

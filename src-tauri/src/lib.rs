@@ -21,6 +21,7 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::list_dir,
             commands::get_config,
             commands::get_keymap,
+            commands::get_help,
             commands::init,
             commands::set_viewport,
             commands::move_cursor,

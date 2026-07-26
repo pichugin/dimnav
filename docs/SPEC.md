@@ -172,6 +172,7 @@ All shortcuts must be **fully configurable**, with a sensible, documented defaul
 
 | Action | Default Key |
 |---|---|
+| Help (About + the live shortcut list) | F1 |
 | Switch active panel | Tab |
 | Move cursor up/down | ↑ / ↓ |
 | Jump between columns | ← / → |
@@ -198,6 +199,8 @@ All shortcuts must be **fully configurable**, with a sensible, documented defaul
 | Quit | Cmd+Q (macOS convention) |
 
 Configuration should support remapping any action to any key or key combination, and detecting conflicts.
+
+**Help must be generated, never hand-written.** The F1 screen lists the shortcuts actually in force by joining the live keymap against a catalog of action descriptions, so a remapped key or an alternate schema is reflected without editing a second list. Every bindable action therefore needs a human-readable title, and a test enforces that the keymap and the catalog stay in step.
 
 **Esc / terminal toggle (Phase 2):** modeled on Midnight Commander. The terminal is always present as a command line at the bottom edge. Pressing **Esc** hides the file panels and reveals the full terminal output (as if the panels were a curtain drawn over an always-running terminal); pressing **Esc** again restores the panels. This is the primary way to inspect command output. See Section 8, Phase 2.
 

@@ -20,6 +20,23 @@ pub trait Command {
     // fn run(&self, ctx: &mut CommandCtx) -> Result<(), OpError>;  // (later)
 }
 
+/// A topic in the F1 help book — the "contribute a UI surface" extension point
+/// (§6a), in the one form that costs the frontend nothing: a topic hands back
+/// structured content, and the renderer decides how to paint it. That keeps the
+/// swappable-frontend rule intact, since a plugin can never ship markup.
+///
+/// The in-tree About and Shortcuts topics in [`crate::help`] are written against
+/// this trait rather than being special-cased, so the loader in Phase 5 has
+/// nothing new to teach them.
+pub trait HelpTopic {
+    /// Stable identifier, e.g. `"shortcuts"`.
+    fn id(&self) -> &str;
+    /// Label for the topic rail.
+    fn title(&self) -> &str;
+    /// Render this topic against the current app state and search query.
+    fn body(&self, ctx: &crate::help::HelpCtx<'_>) -> crate::types::HelpBody;
+}
+
 /// Custom view / edit / open / preview behaviour for a file type — e.g. an image
 /// previewer, a hex viewer, or an archive-as-virtual-directory provider (§6a).
 pub trait FileTypeHandler {

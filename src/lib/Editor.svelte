@@ -41,6 +41,15 @@
     node.scrollTop = 0;
   }
 
+  /**
+   * Take the DOM focus back after an overlay borrowed it (F1 help), leaving the
+   * caret and scroll position exactly where the user left them — unlike the
+   * mount-time `focus` action above, which deliberately jumps to the top.
+   */
+  export function refocus() {
+    area?.focus();
+  }
+
   const encodingLabel: Record<string, string> = {
     utf8: "UTF-8",
     utf8_bom: "UTF-8 BOM",

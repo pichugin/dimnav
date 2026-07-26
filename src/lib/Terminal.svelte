@@ -124,6 +124,15 @@
     stickToBottom = true;
     if (outputEl) outputEl.scrollTop = outputEl.scrollHeight;
   }
+
+  /**
+   * Take the DOM focus back after an overlay borrowed it (F1 help). The core
+   * still has us focused, so the `$effect` above will not fire on its own —
+   * without this the prompt looks focused but swallows nothing.
+   */
+  export function focusInput() {
+    inputEl?.focus();
+  }
 </script>
 
 <section class="terminal" class:expanded class:full={term.size === "full"}>
