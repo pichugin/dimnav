@@ -287,6 +287,62 @@ pub fn set_active_panel(
     Ok(s.snapshot_after_input())
 }
 
+// --- Quick search (§5.9) ----------------------------------------------------
+//
+// Four intents, no policy: the core owns the query, the matching, and the
+// accept-or-reject decision, and the frontend renders whatever comes back
+// (CLAUDE.md). All four return through `snapshot_after_search_input` rather than
+// `snapshot_after_input`, since the latter is precisely what *ends* a search —
+// these are the one kind of input that must not.
+
+/// Cmd+F — open a fresh search box on the panel. The cursor does not move.
+#[tauri::command]
+#[specta::specta]
+pub fn search_start(state: State<'_, SharedState>, panel: PanelId) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::search::open(s.panel_mut(panel));
+    Ok(s.snapshot_after_search_input())
+}
+
+/// Append typed text to the query and jump the cursor to the first match. A
+/// character matching nothing is rejected and bumps `search.miss_rev` instead,
+/// which is the frontend's cue to beep.
+///
+/// Takes a `String` rather than a `char`: it marshals cleanly through specta, and
+/// a paste into the box later needs no second command.
+#[tauri::command]
+#[specta::specta]
+pub fn search_push(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+    text: String,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::search::push(s.panel_mut(panel), &text);
+    Ok(s.snapshot_after_search_input())
+}
+
+/// Backspace — drop the last character and let the cursor follow it back.
+#[tauri::command]
+#[specta::specta]
+pub fn search_backspace(
+    state: State<'_, SharedState>,
+    panel: PanelId,
+) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::search::backspace(s.panel_mut(panel));
+    Ok(s.snapshot_after_search_input())
+}
+
+/// Esc, Enter, or the box's ✕ — close it, leaving the cursor on the match.
+#[tauri::command]
+#[specta::specta]
+pub fn search_close(state: State<'_, SharedState>, panel: PanelId) -> Result<AppSnapshot, String> {
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::nav::search::close(s.panel_mut(panel));
+    Ok(s.snapshot_after_search_input())
+}
+
 // --- Selection (§5.3) -------------------------------------------------------
 
 /// Toggle selection of the entry under the cursor (Space). `..` is a no-op.

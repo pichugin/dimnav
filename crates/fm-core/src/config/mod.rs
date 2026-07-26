@@ -105,6 +105,11 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         action: action.to_string(),
         keys: keys.iter().map(|k| k.to_string()).collect(),
     };
+    let search = |action: &str, keys: &[&str]| KeyBinding {
+        context: "search".to_string(),
+        action: action.to_string(),
+        keys: keys.iter().map(|k| k.to_string()).collect(),
+    };
     vec![
         // Cursor motion (§5.2).
         bind("cursor.up", &["ArrowUp"]),
@@ -148,6 +153,20 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         bind("panel.view_2", &["Ctrl+2"]),
         bind("panel.view_3", &["Ctrl+3"]),
         bind("panel.view_detailed", &["Ctrl+4"]),
+        // --- Quick search (§5.9) ---------------------------------------------
+        // Cmd+F opens a box in the active panel's corner; from there plain
+        // characters are the query, so nothing above has to give up a key. It is
+        // entered deliberately rather than by typing into the panel, which is
+        // what leaves Space / `*` / `-` above meaning exactly what they meant.
+        bind("search.start", &["Meta+f"]),
+        // --- Inside the quick-search box (§5.9) -------------------------------
+        // Both exits close the box and leave the cursor on the match. `Enter` is
+        // bound HERE so it cannot reach `nav.enter` — closing the box and opening
+        // the folder under it on one press would make the search unusable for
+        // finding a folder you did not want to enter. Opening it takes a second
+        // Enter, exactly as the curtain takes a second Escape.
+        search("search.close", &["Escape", "Enter"]),
+        search("search.backspace", &["Backspace"]),
         // --- Terminal, reachable from the panels (§5.7) ----------------------
         // A chord normally carries no explicit `Shift` for a printable key, since
         // the shift is baked into the character (`*` is reported as `*`). That

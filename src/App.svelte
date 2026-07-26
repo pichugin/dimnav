@@ -44,6 +44,7 @@
       sort_mode: "name_folders_first",
       show_hidden: true,
       geometry: { columns: 0, rows_per_column: 0 },
+      search: null,
     };
   }
 
@@ -446,6 +447,77 @@
       if (snapshot.active !== side) snapshot = await nav.setActivePanel(side);
       snapshot = await nav.setCursor(side, index);
       await activateFocused(side);
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  // --- Quick search (§5.9) --------------------------------------------------
+  // The core owns the query, the matching and the accept/reject decision; these
+  // forward the keystroke and render what comes back. The only thing decided
+  // here is the feedback for a rejected character, which is presentation —
+  // same category as the red background on a failure dialog.
+
+  // Reused across beeps: creating an AudioContext per keystroke leaks them, and
+  // browsers cap how many a page may hold. Created lazily on the first miss, by
+  // which point a keydown has certainly happened, so it is never blocked by the
+  // autoplay gesture requirement.
+  let audioCtx: AudioContext | null = null;
+
+  // The reject beep. Deliberately short and quiet: it fires on a mistyped
+  // character, so it has to read as a nudge rather than an alarm.
+  function beep() {
+    try {
+      audioCtx ??= new AudioContext();
+      if (audioCtx.state === "suspended") void audioCtx.resume();
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const t = audioCtx.currentTime;
+      osc.type = "sine";
+      osc.frequency.value = 660;
+      // Ramp down rather than stopping flat, which would click.
+      gain.gain.setValueAtTime(0.06, t);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.08);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(t);
+      osc.stop(t + 0.09);
+    } catch {
+      // No audio device, or the context was refused. The box still flashes red,
+      // so the miss is not silent in the sense that matters.
+    }
+  }
+
+  async function searchStart(side: PanelId) {
+    try {
+      snapshot = await nav.searchStart(side);
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  // A rejected character comes back as a bumped `miss_rev` rather than an error,
+  // so the beep is driven by comparing the counter across the call.
+  async function searchPush(side: PanelId, text: string) {
+    const before = snapshot[side].search?.miss_rev ?? 0;
+    try {
+      snapshot = await nav.searchPush(side, text);
+      if ((snapshot[side].search?.miss_rev ?? 0) !== before) beep();
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  async function searchBackspace(side: PanelId) {
+    try {
+      snapshot = await nav.searchBackspace(side);
+    } catch (err) {
+      status = `error: ${errMessage(err)}`;
+    }
+  }
+
+  async function searchClose(side: PanelId) {
+    try {
+      snapshot = await nav.searchClose(side);
     } catch (err) {
       status = `error: ${errMessage(err)}`;
     }
@@ -972,6 +1044,12 @@
   }
 
   async function openHelp() {
+    // Help is the one surface reached without a snapshot-returning command, so
+    // it is also the one place an open quick-search box has to be closed by
+    // hand — everything else gets it from `snapshot_after_input` (§5.9). No race:
+    // nothing else is in flight for this keypress.
+    const side = snapshot.active;
+    if (snapshot[side].search) await searchClose(side);
     helpOpen = true;
     helpTopic = 0;
     helpQuery = "";
@@ -1082,6 +1160,44 @@
     return false;
   }
 
+  // While the quick-search box is open it takes the plain characters, Backspace,
+  // and its two exits; everything else falls through to the normal panel
+  // dispatch (§5.9). Returns true when the key was consumed.
+  //
+  // The fall-through arm deliberately issues NO cancel call of its own: the core
+  // ends the search inside `snapshot_after_input`, which whatever command runs
+  // next returns through. A cancel fired from here would be a second IPC call
+  // racing that command's snapshot, and the stale one could land last.
+  function searchKeydown(e: KeyboardEvent): boolean {
+    if (keyContext !== "panels") return false;
+    const side = snapshot.active;
+    if (!snapshot[side].search) return false;
+
+    // preventDefault has to happen synchronously — after an await the event has
+    // already been dispatched and preventing it does nothing (same reason the
+    // panels dispatch below calls it before its first await).
+    const bound = keymaps.search?.[chord(e)];
+    if (bound === "search.close") {
+      e.preventDefault();
+      void searchClose(side);
+      return true;
+    }
+    if (bound === "search.backspace") {
+      e.preventDefault();
+      void searchBackspace(side);
+      return true;
+    }
+    // A printable character is query text. Shift is allowed through because it
+    // is already baked into the character; Ctrl/Meta/Alt combos are commands and
+    // must reach the dispatch below.
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      void searchPush(side, e.key);
+      return true;
+    }
+    return false;
+  }
+
   async function onKeydown(e: KeyboardEvent) {
     shiftHeld = e.shiftKey;
     // Help owns the keyboard outright while it is up — it can be opened over any
@@ -1093,6 +1209,10 @@
       if (bound && handleHelpKey(bound)) e.preventDefault();
       return;
     }
+    // The quick-search box, when open, owns plain typing (§5.9). Ahead of F1 so
+    // that Backspace and Escape reach the box, but only ever consuming keys it
+    // has a use for — F1 itself is not one, so help still opens over a search.
+    if (searchKeydown(e)) return;
     // F1 from any surface (§6). Handled here rather than in each surface's own
     // handler so viewer/editor/terminal need to know nothing about help. The
     // modals are the deliberate exception: they are questions awaiting an answer.
@@ -1188,6 +1308,8 @@
         await activateFocused(active);
       } else if (action === "nav.parent") {
         snapshot = await nav.navigate(active, { kind: "parent" });
+      } else if (action === "search.start") {
+        await searchStart(active);
       } else if (action === "panel.toggle_hidden") {
         await setHidden(active, !snapshot[active].show_hidden);
       } else if (action === "panel.cycle_sort") {
@@ -1433,6 +1555,29 @@
           </span>
           <span>{p.entries.length ? p.cursor_index + 1 : 0} / {p.entries.length}</span>
         </footer>
+
+        <!-- Quick search (§5.9), in the panel's top-right corner over the view
+             controls. The query is core-authored text, not an <input>: the core
+             rejects a character that matches nothing, and a focused field would
+             paint it before the core could withdraw it. The `{#key}` remounts the
+             box on each miss so the flash animation retriggers. -->
+        {#if p.search}
+          {#key p.search.miss_rev}
+            <div
+              class="quick-search"
+              class:miss={p.search.miss_rev > 0}
+              role="presentation"
+              onclick={(e) => e.stopPropagation()}
+            >
+              <span class="qs-label">/</span>
+              <span class="qs-text">{p.search.query}</span>
+              <button
+                class="ctl qs-close"
+                title="Cancel search — Esc"
+                onclick={() => void searchClose(side)}>✕</button>
+            </div>
+          {/key}
+        {/if}
       </section>
     {/each}
   </div>
@@ -1765,6 +1910,9 @@
     background: var(--bg);
     border-top: 2px solid transparent;
     cursor: default;
+    /* Anchors the quick-search box (§5.9). It cannot live inside `.listing`,
+       which is overflow:hidden and would clip it. */
+    position: relative;
   }
   .panel.active {
     border-top-color: var(--accent);
@@ -1823,6 +1971,75 @@
   .ctl.toggle.on {
     color: var(--accent);
     border-color: var(--accent);
+  }
+
+  /* Quick search (§5.9) — the panel's top-right corner, sitting over the view
+     controls while it is open. Transient, so covering them costs nothing, and
+     the corner keeps it clear of the listing the user is reading. */
+  .quick-search {
+    position: absolute;
+    top: 3px;
+    right: 4px;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 140px;
+    max-width: calc(100% - 16px);
+    padding: 1px 3px 1px 5px;
+    font-size: 11px;
+    color: var(--fg);
+    background: var(--bg-alt);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+  }
+  .qs-label {
+    color: var(--accent);
+    flex: none;
+  }
+  .qs-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* A rendered caret: the query is core-authored text, not a focused field, so
+     there is no real one to show. */
+  .qs-text::after {
+    content: "▌";
+    color: var(--accent);
+    animation: qs-caret 1s step-end infinite;
+  }
+  @keyframes qs-caret {
+    50% {
+      opacity: 0;
+    }
+  }
+  .qs-close {
+    flex: none;
+    border-color: transparent;
+  }
+  /* A rejected character. Pairs with the beep, and carries the whole message on
+     its own for anyone with interface sounds off. */
+  .quick-search.miss {
+    animation: qs-flash 180ms ease-out;
+  }
+  @keyframes qs-flash {
+    from {
+      background: #6e1f1f;
+      border-color: #d86b6b;
+      color: #ffe;
+    }
+  }
+  @media (prefers-color-scheme: light) {
+    @keyframes qs-flash {
+      from {
+        background: #f5c6c6;
+        border-color: #b34a4a;
+        color: #3a0f0f;
+      }
+    }
   }
 
   .listing {

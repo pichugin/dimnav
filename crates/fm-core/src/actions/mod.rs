@@ -97,6 +97,18 @@ const PANEL_VIEW: &[ActionInfo] = &[
     a("panel.view_detailed", "Detailed view", "Single column with size, date and attributes."),
 ];
 
+const QUICK_SEARCH: &[ActionInfo] = &[
+    a("search.start", "Quick search", "Opens a search box in the active panel's corner; what you type jumps the cursor to the first name that starts with it."),
+];
+
+/// Split from [`QUICK_SEARCH`] the way `TERMINAL_PROMPT` is split from
+/// `TERMINAL`: these are bound in the box's own context, so they head their own
+/// group rather than repeating the section title above them.
+const QUICK_SEARCH_BOX: &[ActionInfo] = &[
+    a("search.close", "Close the search box", "Leaves the cursor on the match. Enter does not open the entry — press it again for that."),
+    a("search.backspace", "Erase a character", "Steps the query back one character, and the cursor with it."),
+];
+
 const TERMINAL: &[ActionInfo] = &[
     a("terminal.focus", "Focus command line", "Hands the keyboard to the prompt below the panels."),
     a("terminal.blur", "Leave command line", "Hands the keyboard back to the active panel; partial input survives."),
@@ -160,6 +172,8 @@ const CATALOG: &[ActionCategory] = &[
     ActionCategory { id: "file_ops", title: "File operations", actions: FILE_OPS },
     ActionCategory { id: "open", title: "View & edit", actions: OPEN },
     ActionCategory { id: "panel_view", title: "Layout & sorting", actions: PANEL_VIEW },
+    ActionCategory { id: "quick_search", title: "Quick search", actions: QUICK_SEARCH },
+    ActionCategory { id: "quick_search_box", title: "In the search box", actions: QUICK_SEARCH_BOX },
     ActionCategory { id: "terminal", title: "Terminal", actions: TERMINAL },
     ActionCategory { id: "terminal_prompt", title: "At the prompt", actions: TERMINAL_PROMPT },
     ActionCategory { id: "viewer_motion", title: "Scrolling", actions: VIEWER_MOTION },

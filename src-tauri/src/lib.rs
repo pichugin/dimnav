@@ -36,6 +36,11 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::deselect_all,
             commands::navigate,
             commands::refresh,
+            // Quick search (§5.9).
+            commands::search_start,
+            commands::search_push,
+            commands::search_backspace,
+            commands::search_close,
             commands::create_dir,
             commands::rename,
             commands::calculate_dir_size,

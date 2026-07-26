@@ -164,6 +164,18 @@ Reference behavior: **model these on FarManager first; where FarManager guidance
 - **Hidden files: shown by default.** A simple toggle turns them off. The toggle state **persists across restarts.**
 - **Persistence (per panel):** sort mode, view/column mode (Section 5.2), and hidden-file visibility are all stored in user preferences and restored on the next launch, independently for each panel.
 
+### 5.9 Quick search
+Jump the cursor to a file by typing the beginning of its name — the orthodox managers' quick search, not a filter and not fuzzy matching.
+
+- **Explicitly opened with Cmd+F**, never by typing into a panel. This is what leaves every existing panel binding (Space, `*`, `-`) meaning exactly what it meant, and it means *any* character — spaces and punctuation included — is query text once the box is open.
+- A small **search box appears in the top-right corner of the active panel**, showing what has been typed so far and a **✕ button** that cancels it.
+- Each typed character extends the query, and the cursor moves to the **first entry whose name starts with it**, case-insensitively. A match below the fold scrolls into view under the normal sliding-window rule (§5.2). `..` is never a match.
+- **A character that would match nothing is rejected**: it is not appended, the cursor does not move, and the app **beeps** and flashes the box. The query therefore always describes a real entry — the user can never be stranded in a dead query.
+- **Backspace** steps the query back one character and the cursor with it. Emptying the query leaves the box open; only an explicit close shuts it.
+- **Esc or Enter closes the box**, leaving the cursor on the match. Neither key does its usual job on that press: **Enter must not open the entry** under the cursor (opening a folder takes a second Enter) and **Esc must not draw the terminal curtain** (that takes a second Esc). Finding a folder you did not want to enter is the common case, so closing and opening on one keystroke would make the search unusable.
+- **Any other input cancels the search** — switching panel, reaching for the terminal, navigating, sorting, or starting a file operation — and then does its normal job. The cursor stays where the search left it.
+- The query is **transient**: never persisted, and it does not survive a change of directory. A refresh of the *same* directory leaves it alone, so an operation completing does not yank the box away mid-word.
+
 ---
 
 ## 6. Keyboard Shortcuts
@@ -191,6 +203,9 @@ All shortcuts must be **fully configurable**, with a sensible, documented defaul
 | Create directory | F7 |
 | Delete (Trash checkbox in dialog, off by default) | F8 / Delete |
 | Insert filename into terminal (no focus change) | Ctrl+Enter |
+| Quick search — jump to a name (§5.9) | Cmd+F |
+| Close quick search (does not open the entry) | Esc / Enter *(while the box is open)* |
+| Erase a character of the quick search | Backspace *(while the box is open)* |
 | Toggle terminal / panels view | Esc *(Phase 2 — see below)* |
 | Cycle sort order | *(only if a non-conflicting key is free; else dropdown only)* |
 | Toggle hidden files | *(only if a non-conflicting key is free; else via panel control)* |

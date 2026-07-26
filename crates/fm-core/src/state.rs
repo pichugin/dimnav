@@ -114,7 +114,23 @@ impl AppState {
     /// answerable. `set_viewport` (fired by a resize observer) and `refresh`
     /// (fired when an operation completes) use the plain
     /// [`snapshot`](Self::snapshot) precisely because they are neither.
+    ///
+    /// It is also where an open quick-search box dies (§5.9). Every user-initiated
+    /// command returns through here, so switching panel, reaching for the
+    /// terminal, navigating, sorting and every file operation end the search
+    /// without a single one of them having to remember to — which is the point,
+    /// since the one that forgot would leave a box floating over a panel it no
+    /// longer describes.
     pub fn snapshot_after_input(&mut self) -> AppSnapshot {
+        self.left.search = None;
+        self.right.search = None;
+        self.snapshot_after_search_input()
+    }
+
+    /// [`snapshot_after_input`](Self::snapshot_after_input) minus the quick-search
+    /// reset — for the quick-search commands themselves, the one kind of input
+    /// that must not end the search it is driving (§5.9).
+    pub fn snapshot_after_search_input(&mut self) -> AppSnapshot {
         self.terminal.touch();
         self.snapshot()
     }

@@ -85,6 +85,21 @@ export const commands = {
 	 *  when it still exists (graceful refresh, SPEC §5.6).
 	 */
 	refresh: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("refresh", { panel })),
+	/**  Cmd+F — open a fresh search box on the panel. The cursor does not move. */
+	searchStart: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("search_start", { panel })),
+	/**
+	 *  Append typed text to the query and jump the cursor to the first match. A
+	 *  character matching nothing is rejected and bumps `search.miss_rev` instead,
+	 *  which is the frontend's cue to beep.
+	 * 
+	 *  Takes a `String` rather than a `char`: it marshals cleanly through specta, and
+	 *  a paste into the box later needs no second command.
+	 */
+	searchPush: (panel: PanelId, text: string) => typedError<AppSnapshot, string>(__TAURI_INVOKE("search_push", { panel, text })),
+	/**  Backspace — drop the last character and let the cursor follow it back. */
+	searchBackspace: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("search_backspace", { panel })),
+	/**  Esc, Enter, or the box's ✕ — close it, leaving the cursor on the match. */
+	searchClose: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("search_close", { panel })),
 	/**
 	 *  Create a directory named `name` inside `panel`'s current directory (F7), then
 	 *  re-read the listing and position the cursor on the new folder. `name` may be a
@@ -682,6 +697,31 @@ export type PanelState = {
 	sort_mode: SortMode,
 	show_hidden: boolean,
 	geometry: PanelGeometry,
+	/**
+	 *  The open quick-search box, or `None` when there is none (§5.9). Transient
+	 *  like `top_index`: never persisted, and any other input ends it.
+	 */
+	search: QuickSearch | null,
+};
+
+/**
+ *  An open quick-search box on a panel (§5.9).
+ * 
+ *  The core is the sole author of `query`: a character that matches nothing is
+ *  rejected rather than appended, so the string always describes a real entry.
+ *  That is why the frontend renders it as text rather than hosting an `<input>` —
+ *  a focused field would show the rejected character before the core could
+ *  withdraw it.
+ */
+export type QuickSearch = {
+	/**  What the user has typed so far — only characters that matched. */
+	query: string,
+	/**
+	 *  Bumped on every rejected character, so the frontend can beep and flash.
+	 *  A counter rather than a flag: two misses in a row must fire twice, and a
+	 *  flag that is already `true` would look unchanged.
+	 */
+	miss_rev: number,
 };
 
 /**

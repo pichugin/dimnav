@@ -112,6 +112,23 @@ pub struct PanelGeometry {
     pub rows_per_column: u16,
 }
 
+/// An open quick-search box on a panel (§5.9).
+///
+/// The core is the sole author of `query`: a character that matches nothing is
+/// rejected rather than appended, so the string always describes a real entry.
+/// That is why the frontend renders it as text rather than hosting an `<input>` —
+/// a focused field would show the rejected character before the core could
+/// withdraw it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
+pub struct QuickSearch {
+    /// What the user has typed so far — only characters that matched.
+    pub query: String,
+    /// Bumped on every rejected character, so the frontend can beep and flash.
+    /// A counter rather than a flag: two misses in a row must fire twice, and a
+    /// flag that is already `true` would look unchanged.
+    pub miss_rev: u32,
+}
+
 /// The full state of one panel — the unit the frontend renders.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct PanelState {
@@ -129,6 +146,9 @@ pub struct PanelState {
     pub sort_mode: SortMode,
     pub show_hidden: bool,
     pub geometry: PanelGeometry,
+    /// The open quick-search box, or `None` when there is none (§5.9). Transient
+    /// like `top_index`: never persisted, and any other input ends it.
+    pub search: Option<QuickSearch>,
 }
 
 impl Default for PanelState {
@@ -144,6 +164,7 @@ impl Default for PanelState {
             // Hidden files are shown by default (§5.8).
             show_hidden: true,
             geometry: PanelGeometry::default(),
+            search: None,
         }
     }
 }

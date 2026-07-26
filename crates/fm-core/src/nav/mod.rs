@@ -25,6 +25,8 @@ use std::path::Path;
 
 use crate::types::{DirListing, Motion, PanelState};
 
+pub mod search;
+
 /// Apply a cursor [`Motion`], updating `cursor_index` per the traversal above.
 /// Uses `state.geometry`; when geometry is unset (`rows_per_column == 0`) the
 /// listing is treated as a single column spanning every entry, so Down/Up still
@@ -118,6 +120,9 @@ pub fn set_geometry(state: &mut PanelState, columns: u16, rows: u16) {
 /// reset the cursor to the top (`..`) and clear selection. Callers that need a
 /// specific cursor (e.g. the parent auto-position rule) follow with
 /// [`position_on`].
+///
+/// Any open quick-search box closes with it: the query described a name in the
+/// directory being left, so it cannot survive the move (§5.9).
 pub fn set_listing(state: &mut PanelState, listing: DirListing) {
     state.path = listing.path;
     state.entries = listing.entries;
@@ -125,6 +130,7 @@ pub fn set_listing(state: &mut PanelState, listing: DirListing) {
     state.cursor_index = 0;
     state.top_index = 0;
     state.selection.clear();
+    state.search = None;
 }
 
 /// Replace a panel's listing **for the same directory**, keeping the user's place:
@@ -146,8 +152,13 @@ pub fn set_listing_preserving(state: &mut PanelState, listing: DirListing) {
         .filter_map(|&i| state.entries.get(i))
         .map(|e| e.name.clone())
         .collect();
+    // Same directory, so an open quick-search box outlives the re-read: a refresh
+    // fired by a completed operation must not yank the box out from under someone
+    // mid-word (§5.9). `set_listing` clears it for the change-directory case.
+    let search = state.search.take();
 
     set_listing(state, listing);
+    state.search = search;
 
     state.selection = state
         .entries

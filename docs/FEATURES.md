@@ -15,6 +15,37 @@ Section references are to `docs/SPEC.md`.
 
 ## Implemented
 
+### Quick search (§5.9)
+
+- [x] **Cmd+F** opens a search box in the **top-right corner of the active
+      panel**, with a **✕** button to cancel. Opened deliberately, never by
+      typing into a panel — which is what leaves Space / `*` / `-` meaning what
+      they always meant, and makes *every* character query text once it is open
+- [x] Each character extends the query and moves the cursor to the **first name
+      that starts with it**, case-insensitively. Prefix, not fuzzy, not a filter
+- [x] A match below the fold scrolls into view under the §5.2 sliding-window
+      rule — quick search goes through the same `set_cursor` as a mouse click
+- [x] `..` is never matched
+- [x] **A character that matches nothing is rejected** — not appended, cursor
+      unmoved — and the app **beeps** and flashes the box red. The query always
+      describes a real entry, so there is no dead-query state to back out of
+- [x] **Backspace** steps the query back and the cursor with it; emptying the
+      query leaves the box open
+- [x] **Esc or Enter** closes the box with the cursor on the match, and
+      **neither does its usual job on that press**: Enter does not open the entry
+      (a second Enter does) and Esc does not draw the terminal curtain (a second
+      Esc does)
+- [x] Any other input cancels the search and then does its normal job —
+      switching panel, Cmd+T, navigating, sorting, F1, or any file operation.
+      Centralised in `AppState::snapshot_after_input`, which every user-initiated
+      command returns through, so no call site can forget
+- [x] Transient: not persisted, and dropped on a change of directory. A refresh
+      of the *same* directory keeps it, so a completing operation cannot yank the
+      box away mid-word
+- [x] The query is **core-authored** — `fm-core::nav::search` owns the matching
+      and the accept/reject decision, and the box renders text rather than
+      hosting an `<input>`, so a rejected character is never painted at all
+
 ### Help popup (§6)
 
 - [x] **F1** opens a large popup over the app, from every surface — panels,

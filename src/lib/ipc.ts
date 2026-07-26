@@ -39,6 +39,7 @@ export type {
   Motion,
   NavTarget,
   PanelId,
+  QuickSearch,
   KeyBinding,
   OpKind,
   OpenAction,
@@ -112,6 +113,13 @@ export const nav = {
   navigate: (panel: PanelId, target: NavTarget) =>
     unwrap(commands.navigate(panel, target)),
   refresh: (panel: PanelId) => unwrap(commands.refresh(panel)),
+  // Quick search (§5.9). The core owns the query and decides whether a typed
+  // character is accepted or rejected — `search.miss_rev` on the returned panel
+  // increments on a reject, which is what the beep watches.
+  searchStart: (panel: PanelId) => unwrap(commands.searchStart(panel)),
+  searchPush: (panel: PanelId, text: string) => unwrap(commands.searchPush(panel, text)),
+  searchBackspace: (panel: PanelId) => unwrap(commands.searchBackspace(panel)),
+  searchClose: (panel: PanelId) => unwrap(commands.searchClose(panel)),
   getKeymap: () => commands.getKeymap(),
   // Selection (§5.3)
   toggleSelection: (panel: PanelId) => unwrap(commands.toggleSelection(panel)),

@@ -47,6 +47,7 @@ impl HelpCtx<'_> {
 /// allow-list.
 const SECTIONS: &[(&str, &str)] = &[
     ("panels", "Panels"),
+    ("search", "Quick search"),
     ("viewer", "Viewer"),
     ("editor", "Editor"),
     ("terminal", "Terminal"),
@@ -392,7 +393,10 @@ mod tests {
     fn sections_are_ordered_and_named() {
         let body = shortcuts("");
         let titles: Vec<&str> = body.sections.iter().map(|s| s.title.as_str()).collect();
-        assert_eq!(titles, vec!["Panels", "Viewer", "Editor", "Terminal", "Help"]);
+        assert_eq!(
+            titles,
+            vec!["Panels", "Quick search", "Viewer", "Editor", "Terminal", "Help"]
+        );
     }
 
     #[test]
@@ -411,7 +415,9 @@ mod tests {
     /// exactly the Meta-bound rows.
     #[test]
     fn filters_on_the_key_symbol_and_its_aliases() {
-        let expected = vec!["terminal.focus", "terminal.toggle_half", "terminal.blur", "terminal.toggle_half"];
+        // Panels-context rows come first, in category order — quick search is
+        // declared before the terminal group, so ⌘F leads.
+        let expected = vec!["search.start", "terminal.focus", "terminal.toggle_half", "terminal.blur", "terminal.toggle_half"];
         for query in ["⌘", "cmd"] {
             let found: Vec<String> = rows(&shortcuts(query)).into_iter().map(|(a, _)| a).collect();
             assert_eq!(found, expected, "{query:?} did not match the ⌘ rows exactly");
