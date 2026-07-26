@@ -77,7 +77,8 @@ Section references are to `docs/SPEC.md`.
 
 ### Embedded terminal (§5.7, §8 Phase 2)
 
-- [x] Command line permanently below the panels, under the selected-files footer
+- [x] Command line permanently below the panels, under the focused-entry status
+      bar and above the F-key bar
 - [x] `>` at the far left; the top border lights up in the active-panel accent
       when the prompt owns the keyboard
 - [x] **Cmd+T** focuses the prompt; Cmd+T again hands the keyboard back to the

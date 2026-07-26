@@ -1582,8 +1582,24 @@
     {/each}
   </div>
 
-  <!-- The command line, directly beneath the panel footers (§5.7). Expanded, its
-       output pane grows upward from here and the panels give up the room. -->
+  <!-- The focused entry, directly beneath the panel it describes. The curtain
+       takes the panels away, so this goes with them — it would otherwise be left
+       at the top of the window narrating a cursor nobody can see. -->
+  {#if snapshot.terminal.size !== "full"}
+    <div class="statusbar">
+      <span class="focused-group">
+        <span class="focused">{focused}</span>
+        {#if focusedMeta}
+          <span class="focused-meta">{focusedMeta}</span>
+        {/if}
+      </span>
+      <span class="state">{status}</span>
+    </div>
+  {/if}
+
+  <!-- The command line, beneath the panels and the entry they point at (§5.7).
+       Expanded, its output pane grows upward from here and the panels give up
+       the room. -->
   <Terminal
     bind:this={terminalRef}
     term={snapshot.terminal}
@@ -1600,16 +1616,6 @@
       <span class="fkey"><b>{key}</b> {name}</span>
     {/each}
   </nav>
-
-  <div class="statusbar">
-    <span class="focused-group">
-      <span class="focused">{focused}</span>
-      {#if focusedMeta}
-        <span class="focused-meta">{focusedMeta}</span>
-      {/if}
-    </span>
-    <span class="state">{status}</span>
-  </div>
 
   <!-- File-operation dialogs (§5.4a). Rendered top-most; only one shows at a
        time, in priority order: destination prompt → collision/error → progress. -->
@@ -2133,19 +2139,11 @@
     box-shadow: inset 0 0 0 1px var(--border);
   }
 
-  .fkeys {
-    display: flex;
-    gap: 12px;
-    flex-wrap: wrap;
-    padding: 4px 8px;
-    background: var(--bg-alt);
-    border-top: 1px solid var(--border);
-    color: var(--fg-dim);
-  }
-  .fkey b {
-    color: var(--accent);
-  }
-
+  /* The bottom rows, in the order they stack. Each draws only a `border-top` —
+     a row is separated by the one below it, and the last is closed by the
+     window edge. `.statusbar` keeps `--bg` even though `.prompt` below it is
+     also `--bg`: that seam carries the prompt's 2px accent rule, so it is the
+     one that can afford to skip the banding. */
   .statusbar {
     display: flex;
     justify-content: space-between;
@@ -2179,6 +2177,19 @@
   .state {
     flex-shrink: 0;
     white-space: nowrap;
+  }
+
+  .fkeys {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 4px 8px;
+    background: var(--bg-alt);
+    border-top: 1px solid var(--border);
+    color: var(--fg-dim);
+  }
+  .fkey b {
+    color: var(--accent);
   }
 
   /* --- File-operation dialogs (§5.4a) --- */
