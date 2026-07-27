@@ -346,9 +346,12 @@ mod tests {
     fn clear_empties_everything_and_reports_it_as_an_ordinary_delta() {
         let mut sb = Scrollback::new(1 << 20);
         sb.append_str("a\nb\npartial");
-        let mut mirror = Mirror::default();
-        mirror.lines = vec!["a".to_string(), "b".into()];
-        mirror.pending = "partial".to_string();
+        // Seeded to match the scrollback above, so the clear delta has something
+        // real to empty.
+        let mut mirror = Mirror {
+            lines: vec!["a".to_string(), "b".into()],
+            pending: "partial".to_string(),
+        };
 
         let chunk = sb.clear();
         assert_eq!(sb.snapshot().lines.len(), 0);

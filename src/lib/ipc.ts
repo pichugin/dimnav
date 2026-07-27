@@ -74,10 +74,13 @@ export type {
   HelpBody,
   AboutBody,
   HelpLine,
+  HelpLink,
   ShortcutsBody,
   ShortcutSection,
   ShortcutGroup,
   ShortcutItem,
+  // In-app updates
+  UpdateInfo,
 } from "./bindings";
 
 /** Result envelope produced by tauri-specta for `Result`-returning commands. */
@@ -239,4 +242,24 @@ export const editor = {
 export const help = {
   /** `query` filters the shortcut list; `""` returns everything. */
   book: (query: string) => commands.getHelp(query),
+  /**
+   * Hand one of the About topic's links to the OS browser. Never navigate the
+   * webview to it — that would replace the app with a web page and there is no
+   * way back.
+   */
+  openLink: (url: string) => unwrap(commands.openLink(url)),
+};
+
+/**
+ * In-app updates. The release feed is checked once at startup and the result is
+ * surfaced in Help → About; there is no nagging dialog.
+ */
+export const updates = {
+  /**
+   * `null` means up to date *or* undeterminable — the backend folds the two
+   * together on purpose, so an offline launch is silent rather than an error.
+   */
+  check: () => unwrap(commands.checkUpdate()),
+  /** Downloads, verifies, installs, and relaunches. Does not return on success. */
+  install: () => unwrap(commands.installUpdate()),
 };

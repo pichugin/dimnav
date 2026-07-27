@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { nav, ops, open, viewer, editor, terminal, help, events } from "./lib/ipc";
+  import { nav, ops, open, viewer, editor, terminal, help, updates, events } from "./lib/ipc";
   import type {
     AppSnapshot,
     EditDoc,
@@ -19,6 +19,7 @@
     SearchDirection,
     SortMode,
     TerminalState,
+    UpdateInfo,
     ViewMode,
     ViewMotion,
     ViewPage,
@@ -27,6 +28,9 @@
   import Editor from "./lib/Editor.svelte";
   import Terminal from "./lib/Terminal.svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
+  // Vite rewrites this to a hashed bundle URL. Generated from the same emblem as
+  // the app icon by `scripts/make-icon.py` — regenerate both together.
+  import logoUrl from "./assets/dimnav-icon.png";
 
   // Row height in px — single source of truth shared by the grid layout and the
   // viewport measurement, so the core's rows_per_column matches what's rendered.
@@ -139,6 +143,14 @@
   let helpQuery = $state("");
   let helpBook = $state<HelpBook | null>(null);
   let helpContentEl = $state<HTMLElement | null>(null);
+
+  // --- Updates --------------------------------------------------------------
+  // Checked once at startup and shown only inside About. Deliberately not a
+  // dialog: an update is never urgent enough to interrupt what you were doing,
+  // and this app is used by the keystroke.
+  let pendingUpdate = $state<UpdateInfo | null>(null);
+  let updateInstalling = $state(false);
+  let updateError = $state("");
 
   // Every modal that owns the keyboard until it is answered. F1 defers to these:
   // they are questions, and stacking help on top of one strands the answer.
@@ -1090,6 +1102,37 @@
     helpContentEl?.scrollBy({ top: amount });
   }
 
+  /**
+   * Open an About link in the OS browser. A failure here is not worth a dialog —
+   * the user pressed a link, not started an operation — so it degrades to a
+   * console warning and the help screen stays exactly as it was.
+   */
+  async function openAboutLink(url: string) {
+    try {
+      await help.openLink(url);
+    } catch (e) {
+      console.warn(`could not open ${url}:`, e);
+    }
+  }
+
+  /**
+   * Install the pending update and relaunch. The button is replaced by a status
+   * line for the duration: the download can take a while, and a second press
+   * would start a second download.
+   */
+  async function installUpdate() {
+    if (updateInstalling) return;
+    updateInstalling = true;
+    updateError = "";
+    try {
+      await updates.install();
+      // Not reached — the backend relaunches the app on success.
+    } catch (e) {
+      updateError = String(e);
+      updateInstalling = false;
+    }
+  }
+
   function handleHelpKey(action: string): boolean {
     const count = helpBook?.topics.length ?? 0;
     switch (action) {
@@ -1359,6 +1402,15 @@
       try {
         keymaps = buildKeymap(await nav.getKeymap());
         snapshot = await nav.init();
+
+        // Fire-and-forget: the panels must not wait on a network round trip to
+        // paint. The backend already swallows offline and not-yet-published
+        // feeds, so there is nothing here worth reporting.
+        void updates
+          .check()
+          .then((info) => (pendingUpdate = info))
+          .catch(() => {});
+
         await tick();
         await measureAll();
         ro = new ResizeObserver(() => void measureAll());
@@ -1833,6 +1885,11 @@
           <section class="topic-content" bind:this={helpContentEl}>
             {#if topic?.body.kind === "about"}
               {@const about = topic.body.value}
+              <!-- The icon is the squircle-masked emblem the app bundle ships,
+                   not the full wordmark lockup: a self-contained rounded tile
+                   sits correctly on both the dark and light themes, where a
+                   full-bleed dark image would be a slab on near-white. -->
+              <img class="about-logo" src={logoUrl} alt="" width="112" height="112" />
               <h1 class="about-name">{about.app.name}</h1>
               <p class="about-desc">{about.app.description}</p>
               <dl class="about-lines">
@@ -1841,6 +1898,31 @@
                   <dd>{line.value}</dd>
                 {/each}
               </dl>
+              {#if pendingUpdate}
+                <div class="about-update">
+                  <span>Version {pendingUpdate.version} is available.</span>
+                  {#if updateInstalling}
+                    <span class="about-update-status">Downloading…</span>
+                  {:else}
+                    <button class="about-link" onclick={installUpdate}>
+                      Install and restart
+                    </button>
+                  {/if}
+                  {#if updateError}
+                    <span class="about-update-error">{updateError}</span>
+                  {/if}
+                </div>
+              {/if}
+
+              {#if about.links.length}
+                <div class="about-links">
+                  {#each about.links as link (link.url)}
+                    <button class="about-link" onclick={() => openAboutLink(link.url)}>
+                      {link.label}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
             {:else if topic?.body.kind === "shortcuts"}
               {@const sc = topic.body.value}
               <div class="search">
@@ -2423,6 +2505,15 @@
   }
 
   /* About */
+  .about-logo {
+    display: block;
+    width: 112px;
+    height: 112px;
+    margin: 0 0 12px;
+    /* The source already carries the macOS squircle in its alpha channel, so no
+       border-radius here — rounding it again would clip the corners twice. */
+    image-rendering: -webkit-optimize-contrast;
+  }
   .about-name {
     margin: 0 0 4px;
     font-size: 18px;
@@ -2443,6 +2534,49 @@
   }
   .about-lines dd {
     margin: 0;
+  }
+  .about-update {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 10px;
+    margin-top: 20px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: 4px;
+    background: var(--bg);
+  }
+  .about-update-status {
+    color: var(--fg-dim);
+  }
+  .about-update-error {
+    flex-basis: 100%;
+    color: var(--term-err);
+  }
+  .about-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    margin-top: 20px;
+  }
+  /* A <button>, not an <a>: these never navigate the webview, they hand the URL
+     to the OS browser. Styled as a link so it still reads as one. */
+  .about-link {
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .about-link:hover {
+    text-decoration: none;
+  }
+  .about-link:focus-visible {
+    outline: 1px solid var(--accent);
+    outline-offset: 2px;
   }
 
   /* Shortcuts */

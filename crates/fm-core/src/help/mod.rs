@@ -17,8 +17,8 @@
 use crate::actions;
 use crate::plugin::HelpTopic;
 use crate::types::{
-    AboutBody, AppInfo, HelpBody, HelpBook, HelpLine, HelpTopicView, KeyBinding, ShortcutGroup,
-    ShortcutItem, ShortcutSection, ShortcutsBody,
+    AboutBody, AppInfo, HelpBody, HelpBook, HelpLine, HelpLink, HelpTopicView, KeyBinding,
+    ShortcutGroup, ShortcutItem, ShortcutSection, ShortcutsBody,
 };
 
 /// Everything a topic needs to render itself.
@@ -166,12 +166,29 @@ impl HelpTopic for AboutTopic {
             label: label.to_string(),
             value: value.to_string(),
         };
+        // Skip links the adapter left unset, so a build without packaging
+        // metadata shows a shorter About rather than rows that go nowhere.
+        let link = |label: &str, url: &str| {
+            (!url.is_empty()).then(|| HelpLink {
+                label: label.to_string(),
+                url: url.to_string(),
+            })
+        };
         HelpBody::About(AboutBody {
             app: ctx.app.clone(),
             lines: vec![
                 line("Version", &ctx.app.version),
+                line("License", &ctx.app.license),
                 line("Shortcut schema", "Default"),
             ],
+            links: [
+                link("Website", &ctx.app.homepage),
+                link("Source code", &ctx.app.repository),
+                link("Support this project", &ctx.app.sponsor),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
         })
     }
 }
@@ -323,9 +340,20 @@ mod tests {
 
     fn app() -> AppInfo {
         AppInfo {
-            name: "File Manager".to_string(),
+            name: "dimnav".to_string(),
             version: "0.1.0".to_string(),
             description: "Keyboard-first two-panel file manager".to_string(),
+            license: "MIT".to_string(),
+            homepage: "https://dimnav.com".to_string(),
+            repository: "https://github.com/pichugin/dimnav".to_string(),
+            sponsor: "https://github.com/sponsors/pichugin".to_string(),
+        }
+    }
+
+    fn about(app: &AppInfo) -> AboutBody {
+        match &book(app, &default_keymap(), "").topics[0].body {
+            HelpBody::About(a) => a.clone(),
+            other => panic!("expected About, got {other:?}"),
         }
     }
 
@@ -356,11 +384,51 @@ mod tests {
         assert_eq!(book.topics[1].id, "shortcuts");
         match &book.topics[0].body {
             HelpBody::About(a) => {
-                assert_eq!(a.app.name, "File Manager");
+                assert_eq!(a.app.name, "dimnav");
                 assert_eq!(a.app.version, "0.1.0");
             }
             other => panic!("expected About, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn about_lists_every_link_the_adapter_supplied() {
+        let body = about(&app());
+        assert_eq!(
+            body.links
+                .iter()
+                .map(|l| (l.label.as_str(), l.url.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Website", "https://dimnav.com"),
+                ("Source code", "https://github.com/pichugin/dimnav"),
+                ("Support this project", "https://github.com/sponsors/pichugin"),
+            ]
+        );
+    }
+
+    /// A build without packaging metadata must show a shorter About, never a row
+    /// whose activation goes nowhere.
+    #[test]
+    fn about_omits_links_the_adapter_left_unset() {
+        let mut info = app();
+        info.homepage = String::new();
+        info.sponsor = String::new();
+
+        let body = about(&info);
+
+        assert_eq!(
+            body.links.iter().map(|l| l.label.as_str()).collect::<Vec<_>>(),
+            vec!["Source code"]
+        );
+        assert!(body.links.iter().all(|l| !l.url.is_empty()));
+    }
+
+    #[test]
+    fn about_reports_the_license() {
+        let body = about(&app());
+        let license = body.lines.iter().find(|l| l.label == "License");
+        assert_eq!(license.map(|l| l.value.as_str()), Some("MIT"));
     }
 
     /// Every binding in the keymap has to reach the help screen — a shortcut the

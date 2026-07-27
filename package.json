@@ -1,7 +1,7 @@
 {
-  "name": "file-manager",
+  "name": "dimnav",
   "version": "0.1.0",
-  "description": "Keyboard-first two-panel file manager (Tauri + Rust). Frontend is a thin, swappable Svelte renderer.",
+  "description": "Keyboard-first two-panel file manager for macOS. Frontend is a thin, swappable Svelte renderer.",
   "type": "module",
   "license": "MIT",
   "scripts": {
@@ -9,7 +9,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "bindings": "cargo run -p file-manager --bin export_bindings",
+    "bindings": "cargo run -p file-manager --example export_bindings",
+    "bump": "node scripts/bump-version.mjs",
+    "icon": "python3 scripts/make-icon.py",
     "tauri": "tauri"
   },
   "dependencies": {

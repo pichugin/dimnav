@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Entitlements for Developer ID distribution (signed + notarized, outside the
+	  Mac App Store). Tauri enables the hardened runtime by default, which is what
+	  notarization requires.
+
+	  Deliberately EMPTY, and deliberately NOT sandboxed:
+
+	  * com.apple.security.app-sandbox is absent on purpose. The sandbox would break
+	    the built-in terminal (src-tauri/src/terminal_runtime.rs spawns $SHELL) and
+	    privilege elevation (src-tauri/src/ops_runtime.rs shells out to osascript's
+	    "do shell script … with administrator privileges"), and would force
+	    security-scoped bookmarks for every panel path. This is the reason dimnav is
+	    not distributed through the Mac App Store.
+
+	  * No JIT entitlement. WKWebView runs JavaScript in Apple's own signed
+	    com.apple.WebKit.WebContent process, so the host binary never needs
+	    com.apple.security.cs.allow-jit. If the webview ever misbehaves under the
+	    hardened runtime, that key is the first thing to try — but add it only once
+	    a real failure proves it necessary, since every entitlement widens the
+	    attack surface the hardened runtime exists to narrow.
+
+	  Child processes (zsh, osascript, open) are separately Apple-signed and carry
+	  their own runtime policy; nothing here constrains or grants them anything.
+	-->
+</dict>
+</plist>

@@ -96,9 +96,11 @@ pub fn get_keymap() -> Vec<KeyBinding> {
 /// matching are the core's: this only supplies the packaging metadata, which is
 /// the one thing `fm-core` cannot know about itself.
 ///
-/// `package_info()` resolves to the bundle's `productName` and `version` from
-/// `tauri.conf.json` — the identity a shipped app actually presents — while the
-/// one-line description comes from the crate manifest.
+/// `package_info()` resolves to the bundle's `productName` from `tauri.conf.json`
+/// and its `version` — which, since `tauri.conf.json` omits `version`, the
+/// bundler takes from `Cargo.toml`, making the workspace manifest the single
+/// source of truth. The remaining fields come straight from that same manifest,
+/// so there is no hand-maintained copy of any of this to drift.
 #[tauri::command]
 #[specta::specta]
 pub fn get_help(app: AppHandle, query: String) -> HelpBook {
@@ -107,10 +109,108 @@ pub fn get_help(app: AppHandle, query: String) -> HelpBook {
         name: pkg.name.clone(),
         version: pkg.version.to_string(),
         description: env!("CARGO_PKG_DESCRIPTION").to_string(),
+        license: env!("CARGO_PKG_LICENSE").to_string(),
+        homepage: env!("CARGO_PKG_HOMEPAGE").to_string(),
+        repository: env!("CARGO_PKG_REPOSITORY").to_string(),
+        // Cargo has no sponsorship field, so this is the one string with nowhere
+        // else to live. Keep it beside the rest of the identity rather than
+        // hiding it in the core, which owns no packaging facts at all.
+        sponsor: SPONSOR_URL.to_string(),
     };
     // Same keymap source as `get_keymap`, so help can never disagree with what
     // the keyboard actually does.
     fm_core::help::book(&info, &fm_core::config::default_keymap(), &query)
+}
+
+/// Where the About topic's "Support this project" row points.
+const SPONSOR_URL: &str = "https://github.com/sponsors/pichugin";
+
+/// A newer release than the one running, as advertised by the update feed.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct UpdateInfo {
+    pub version: String,
+    /// Release notes from the feed. Often empty; the renderer must cope.
+    pub notes: String,
+}
+
+/// Ask the update feed whether a newer release exists (§ release process).
+///
+/// `Ok(None)` means "up to date" *and* "could not tell" — the two are
+/// deliberately not distinguished. This runs unprompted at startup, and a laptop
+/// that is offline, behind a captive portal, or simply ahead of a not-yet-created
+/// release must not produce an error the user has to dismiss. Real failures are
+/// still worth seeing while developing, so they are logged.
+///
+/// Updates are verified against the public key in `tauri.conf.json` before
+/// anything is written to disk; an unsigned or mis-signed payload fails here
+/// rather than being installed.
+#[tauri::command]
+#[specta::specta]
+pub async fn check_update(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = match app.updater() {
+        Ok(updater) => updater,
+        Err(e) => {
+            eprintln!("updater unavailable: {e}");
+            return Ok(None);
+        }
+    };
+    match updater.check().await {
+        Ok(Some(update)) => Ok(Some(UpdateInfo {
+            version: update.version.clone(),
+            notes: update.body.clone().unwrap_or_default(),
+        })),
+        Ok(None) => Ok(None),
+        Err(e) => {
+            eprintln!("update check failed: {e}");
+            Ok(None)
+        }
+    }
+}
+
+/// Download, verify, install the pending update, then relaunch into it.
+///
+/// Unlike [`check_update`] this is user-initiated, so failures are surfaced: the
+/// user pressed a button and is owed an answer. Does not return on success — the
+/// process is replaced by the new build.
+#[tauri::command]
+#[specta::specta]
+pub async fn install_update(app: AppHandle) -> Result<(), String> {
+    use tauri_plugin_updater::UpdaterExt;
+
+    let update = app
+        .updater()
+        .map_err(|e| format!("updater unavailable: {e}"))?
+        .check()
+        .await
+        .map_err(|e| format!("could not reach the update service: {e}"))?
+        .ok_or_else(|| "no update is available".to_string())?;
+
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| format!("could not install the update: {e}"))?;
+
+    app.restart();
+}
+
+/// Open one of the About topic's links in the user's browser (§6).
+///
+/// Restricted to `http`/`https` on purpose. The webview only ever passes URLs the
+/// core just handed it, but this command is reachable from any frontend code, and
+/// the opener plugin will happily launch `file://` paths or custom schemes —
+/// which is a local-file-execution primitive, not a browser link. Narrowing the
+/// scheme here keeps that door shut regardless of what the renderer does.
+#[tauri::command]
+#[specta::specta]
+pub fn open_link(app: AppHandle, url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("only http(s) links can be opened".to_string());
+    }
+    tauri_plugin_opener::OpenerExt::opener(&app)
+        .open_url(url, None::<&str>)
+        .map_err(|e| format!("could not open link: {e}"))
 }
 
 /// List a directory into a structured [`DirListing`] (utility; panels use the

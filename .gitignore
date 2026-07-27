@@ -40,3 +40,23 @@ Desktop.ini
 
 # Claude Code (local, per-user settings)
 .claude/settings.local.json
+
+# Icon pipeline: the contact sheet is a review aid, regenerated on demand by
+# `npm run icon -- --preview`. The masters it writes ARE committed — the bundle
+# icon set is built from them.
+scripts/.icon-preview.png
+
+# Python bytecode from scripts/make-icon.py. Interpreter-version-specific and
+# regenerated on every run, so it is pure noise in a diff.
+__pycache__/
+*.py[cod]
+
+# Signing material must never land in the repo. The updater private key lives in
+# ~/.tauri/ and the Apple certificate/notarization key are GitHub secrets; these
+# patterns are a backstop against a stray copy.
+*.p12
+*.p8
+*.key
+!**/*.key.pub
+*.provisionprofile
+*.certSigningRequest

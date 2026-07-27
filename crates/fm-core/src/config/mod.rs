@@ -11,14 +11,19 @@
 //! adapter stays pure marshalling (CLAUDE.md).
 
 use std::path::{Path, PathBuf};
+use std::sync::Once;
 
 use crate::types::{Config, KeyBinding};
 
 /// Directory name under the OS config root.
-const APP_DIR: &str = "file-manager";
+const APP_DIR: &str = "dimnav";
+
+/// What [`APP_DIR`] was called before the app was named dimnav. See [`migrate`].
+const LEGACY_APP_DIR: &str = "file-manager";
+
 const FILE_NAME: &str = "config.toml";
 
-/// Absolute path of the config file — `~/Library/Application Support/file-manager/
+/// Absolute path of the config file — `~/Library/Application Support/dimnav/
 /// config.toml` on macOS (§7), the platform equivalent elsewhere. `None` only if
 /// the OS config directory cannot be determined, in which case the app runs on
 /// defaults and simply does not persist.
@@ -30,7 +35,40 @@ pub fn config_path() -> Option<PathBuf> {
 /// absent, unreadable, or unparsable. Never fails: a broken config must not stop
 /// the app from starting (§7 — zero configuration is a working configuration).
 pub fn load() -> Config {
+    ensure_migrated();
     config_path().map(|p| load_from(&p)).unwrap_or_default()
+}
+
+/// Move a pre-rename config directory to its new name, once per process.
+///
+/// The app shipped as "File Manager" before it was named dimnav, so anyone who
+/// ran it then has settings, panel state, and terminal history under the old
+/// directory name. Everything in there is path-derived from [`config_path`], so
+/// renaming the directory carries the whole lot across in one move.
+///
+/// Call this from every entry point that reads persisted state, not just
+/// [`load`] — terminal history builds its path from [`config_path`] directly and
+/// may well be read first. The [`Once`] makes the extra calls free and keeps the
+/// rename from racing itself if two surfaces load concurrently.
+pub fn ensure_migrated() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if let Some(root) = dirs::config_dir() {
+            migrate(&root.join(LEGACY_APP_DIR), &root.join(APP_DIR));
+        }
+    });
+}
+
+/// The testable half of [`ensure_migrated`].
+///
+/// Only ever renames into a name that does not exist yet, so a live config can
+/// never be clobbered and a half-finished move cannot compound. Errors are
+/// swallowed deliberately: losing preferences is annoying, but refusing to start
+/// because a rename failed would be worse (§7).
+fn migrate(legacy: &Path, current: &Path) {
+    if legacy.is_dir() && !current.exists() {
+        let _ = std::fs::rename(legacy, current);
+    }
 }
 
 /// Persist config to disk as TOML. Errors are swallowed by design — a failed
@@ -249,24 +287,73 @@ pub fn default_keymap() -> Vec<KeyBinding> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testutil::unique_dir;
     use crate::types::{FileAssociation, SortMode, ViewMode};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir()
-            .join(format!("fm_core_cfg_{nanos}"))
-            .join(FILE_NAME)
+        unique_dir("fm_core_cfg").join(FILE_NAME)
+    }
+
+    /// A fresh, empty directory to hang legacy/current config dirs off.
+    fn temp_root() -> PathBuf {
+        unique_dir("fm_core_mig")
+    }
+
+    #[test]
+    fn migrate_renames_a_legacy_dir_and_keeps_its_contents() {
+        let root = temp_root();
+        let (legacy, current) = (root.join(LEGACY_APP_DIR), root.join(APP_DIR));
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join(FILE_NAME), "trash_default = true\n").unwrap();
+        std::fs::write(legacy.join("history"), "ls -la\n").unwrap();
+
+        migrate(&legacy, &current);
+
+        assert!(!legacy.exists(), "legacy dir should be gone after the move");
+        // Everything path-derived from config_path rides along, history included.
+        assert!(current.join(FILE_NAME).is_file());
+        assert_eq!(
+            std::fs::read_to_string(current.join("history")).unwrap(),
+            "ls -la\n"
+        );
+    }
+
+    #[test]
+    fn migrate_never_clobbers_an_existing_config() {
+        let root = temp_root();
+        let (legacy, current) = (root.join(LEGACY_APP_DIR), root.join(APP_DIR));
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join(FILE_NAME), "trash_default = true\n").unwrap();
+        std::fs::create_dir_all(&current).unwrap();
+        std::fs::write(current.join(FILE_NAME), "trash_default = false\n").unwrap();
+
+        migrate(&legacy, &current);
+
+        assert_eq!(
+            std::fs::read_to_string(current.join(FILE_NAME)).unwrap(),
+            "trash_default = false\n",
+            "the live config must win"
+        );
+        assert!(legacy.exists(), "legacy dir is left alone, not deleted");
+    }
+
+    #[test]
+    fn migrate_is_a_noop_without_a_legacy_dir() {
+        let root = temp_root();
+        let (legacy, current) = (root.join(LEGACY_APP_DIR), root.join(APP_DIR));
+
+        migrate(&legacy, &current);
+
+        assert!(!current.exists(), "must not conjure an empty config dir");
     }
 
     #[test]
     fn round_trips_through_toml() {
         let path = temp_path();
-        let mut cfg = Config::default();
-        cfg.trash_default = true;
+        let mut cfg = Config {
+            trash_default: true,
+            ..Config::default()
+        };
         cfg.left_panel.view_mode = ViewMode::Detailed;
         cfg.left_panel.sort_mode = SortMode::Size;
         cfg.left_panel.show_hidden = false;

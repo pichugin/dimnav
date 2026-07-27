@@ -52,9 +52,21 @@ Section references are to `docs/SPEC.md`.
       viewer, editor, and the focused terminal prompt
 - [x] Topics listed vertically on the left; **Tab** / **Shift+Tab** cycle them,
       wrapping round at either end. Clicking a topic works too
-- [x] **About** (the default topic): app name, version and description, taken
-      from the Tauri bundle metadata (`productName` / `version`) and the crate
-      manifest — no hand-maintained version string
+- [x] **About** (the default topic): the app icon, name, version, license and
+      description, taken from the Tauri bundle metadata (`productName`) and the
+      crate manifest — no hand-maintained version string. `tauri.conf.json` omits
+      `version` entirely so the bundler falls back to `Cargo.toml`, making the
+      workspace manifest the single source
+- [x] About shows the **squircle-masked app icon**, not the wordmark lockup: a
+      self-contained rounded tile sits correctly on both themes, where a
+      full-bleed dark image would be a slab on the light background
+- [x] About links out to the website, the source repository, and sponsorship.
+      Links the adapter left unset are omitted rather than rendered dead. Opening
+      one hands the URL to the OS browser via a command restricted to `http(s)`,
+      so the webview is never navigated away from the app
+- [x] When a newer release exists, About shows it with an **Install and restart**
+      action. The check runs once at startup and never blocks the panels;
+      offline, rate-limited, and not-yet-published feeds are all silent
 - [x] **Shortcuts**: every binding currently in force, sectioned by keyboard
       context (Panels / Viewer / Editor / Terminal / Help) and grouped by what
       the action does, each with a title and a short explanation
@@ -173,6 +185,44 @@ so it could only colour by exit code. The consequences:
 - [ ] Bulk rename
 - [ ] File search across a directory tree
 - [ ] Git-aware status column
+
+---
+
+## Distribution
+
+The app ships as **dimnav**, macOS-only for now, signed with a Developer ID
+certificate and notarized so it installs without Gatekeeper warnings. The Mac App
+Store is deliberately out of scope: its mandatory sandbox would break the
+built-in terminal and the `osascript` privilege elevation, and would force
+security-scoped bookmarks on every panel path.
+
+- [x] Named **dimnav**, bundle identifier `com.dimnav.desktop` (reverse DNS of
+      `dimnav.com`), with a one-time migration that renames the old
+      `file-manager` config directory so existing settings and terminal history
+      carry across
+- [x] App icon generated from the emblem by `scripts/make-icon.py` — superellipse
+      mask on the Big Sur 824-in-1024 grid. `npm run icon -- --preview` writes a
+      contact sheet down to 16px, which is where icon detail dies
+- [x] `bundle.macOS` block with `minimumSystemVersion`, category, copyright, and
+      an `Entitlements.plist` that is deliberately empty and deliberately **not**
+      sandboxed
+- [x] `Info.plist` carrying the TCC usage strings for Desktop, Documents,
+      Downloads, removable and network volumes (§3) — without them the permission
+      prompt is blank, and on recent macOS may be denied outright
+- [x] Version single-sourced to the workspace `Cargo.toml`; `npm run bump <ver>`
+      drags npm's manifests along
+- [x] MIT `LICENSE`, `README`, `CONTRIBUTING`, and pinned toolchains
+      (`rust-toolchain.toml`, `.nvmrc`) for reproducible CI builds
+- [x] CI on every PR: clippy under `-D warnings`, the full test suite, the Svelte
+      typecheck, and a guard that fails if `bindings.ts` is stale
+- [x] Tag-triggered release workflow producing a signed, notarized universal
+      `.dmg` as a **draft** release. Linux and Windows jobs are present but
+      commented out until those platforms are actually implemented
+- [x] Signed auto-updates against the GitHub release feed
+- [x] Static site in `site/`, deployed to GitHub Pages, resolving the current
+      download from the releases API with a no-JS fallback
+- [ ] Apple Developer Program enrolment and the signing secrets (manual, external)
+- [ ] A screenshot for the README and the site
 
 ---
 

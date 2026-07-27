@@ -1,18 +1,33 @@
 [package]
 name = "file-manager"
-version = "0.1.0"
-description = "Keyboard-first two-panel file manager (Tauri + Rust)"
-authors = ["Dima"]
-edition = "2021"
-# Two binaries exist (the app + the `export_bindings` helper); tell `cargo run`
-# / `tauri dev` which one is the app.
-default-run = "file-manager"
+# The crate name stays `file-manager`; the product is named in tauri.conf.json.
+# `description`, `homepage`, `repository` and `license` below are read back at
+# runtime via env!("CARGO_PKG_*") to populate the Help → About topic, so they are
+# user-visible strings, not just packaging metadata.
+description = "Keyboard-first two-panel file manager for macOS"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+# Only one binary — `export_bindings` is an example, because Tauri's bundler
+# copies every bin target into the .app and the universal build only produces the
+# main one. Kept anyway so `cargo run` stays unambiguous if a bin is ever added.
+default-run = "dimnav"
 
 # The `_lib` suffix keeps the lib name distinct from the bin (a Windows quirk;
 # see https://github.com/rust-lang/cargo/issues/8519).
 [lib]
 name = "file_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Named for the product, not the crate: this becomes CFBundleExecutable, so it is
+# what Activity Monitor, `ps`, and crash reports display. Left as `file-manager`
+# it leaks the old name everywhere the .app's contents are visible.
+[[bin]]
+name = "dimnav"
+path = "src/main.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
@@ -22,6 +37,11 @@ tauri-build = { version = "2", features = [] }
 # via `convertFileSrc`, gated by the `assetProtocol` scope in tauri.conf.json.
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
+
+# Signed in-app updates, verified against the public key in tauri.conf.json and
+# served from the GitHub release feed.
+tauri-plugin-updater = "2"
+
 serde = { workspace = true }
 serde_json = "1"
 
