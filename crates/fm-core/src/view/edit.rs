@@ -351,9 +351,11 @@ mod tests {
         assert!(matches!(docs.save(&doc.id, "changed\n", false), SaveOutcome::ReadOnly));
         assert_eq!(tmp.bytes(), b"look but do not touch\n");
 
-        let mut perms = std::fs::metadata(&tmp.0).unwrap().permissions();
-        perms.set_readonly(false);
-        std::fs::set_permissions(&tmp.0, perms).unwrap();
+        // Restore write permission so Temp's drop can remove the file. Set the
+        // mode explicitly rather than via set_readonly(false), which on unix
+        // means world-writable.
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&tmp.0, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
 
     #[test]

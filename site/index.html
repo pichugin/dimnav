@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>dimnav — a keyboard-first two-panel file manager for macOS</title>
+    <meta
+      name="description"
+      content="A fast, keyboard-first two-panel file manager for macOS, in the Norton Commander lineage. Free and open source."
+    />
+    <link rel="icon" href="assets/dimnav-icon.png" />
+    <link rel="canonical" href="https://dimnav.com/" />
+
+    <meta property="og:title" content="dimnav" />
+    <meta
+      property="og:description"
+      content="A fast, keyboard-first two-panel file manager for macOS."
+    />
+    <meta property="og:image" content="https://dimnav.com/assets/dimnav-logo.png" />
+    <meta property="og:url" content="https://dimnav.com/" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <style>
+      /* Mirrors the app's own palette (src/app.css) so the site and the product
+         look like the same thing. The brand green is the site's accent; the app
+         keeps its blue --accent for file listings, where green already means
+         "executable". */
+      :root {
+        --bg: #14161a;
+        --bg-alt: #1c1f24;
+        --fg: #e4e4e8;
+        --fg-dim: #9a9aa4;
+        --border: #2c3037;
+        --accent: #4ade80;
+        --accent-dim: #2dd4bf;
+        --radius: 10px;
+      }
+
+      @media (prefers-color-scheme: light) {
+        :root {
+          --bg: #fbfbfa;
+          --bg-alt: #f0f0ee;
+          --fg: #23232a;
+          --fg-dim: #5c5c66;
+          --border: #dcdcd8;
+          --accent: #15803d;
+          --accent-dim: #0f766e;
+        }
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 0 24px 96px;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        line-height: 1.6;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+      }
+
+      code,
+      kbd {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      }
+
+      /* Hero */
+      .hero {
+        text-align: center;
+        padding: 72px 0 56px;
+      }
+      .hero img {
+        width: 260px;
+        max-width: 70%;
+        height: auto;
+        /* The lockup has an opaque near-black backdrop baked in (#010203), which
+           against any page colour shows as a hard-edged square. Rounding it
+           turns that seam into a deliberate tile — and one that still reads as
+           intentional on the light theme, where a square black slab would not. */
+        border-radius: 18px;
+      }
+      .hero h1 {
+        margin: 20px 0 8px;
+        font-size: clamp(1.9rem, 5vw, 2.6rem);
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+      }
+      .hero p {
+        margin: 0 auto;
+        max-width: 34em;
+        color: var(--fg-dim);
+        font-size: 1.05rem;
+      }
+
+      /* Download */
+      .download {
+        margin: 36px 0 8px;
+      }
+      .btn {
+        display: inline-block;
+        padding: 13px 30px;
+        border-radius: var(--radius);
+        background: var(--accent);
+        color: var(--bg);
+        font-size: 1.05rem;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .btn:hover {
+        filter: brightness(1.08);
+      }
+      .btn:focus-visible {
+        outline: 2px solid var(--fg);
+        outline-offset: 3px;
+      }
+      .meta {
+        margin-top: 12px;
+        color: var(--fg-dim);
+        font-size: 0.9rem;
+      }
+      .meta a {
+        color: inherit;
+      }
+
+      /* Content */
+      section {
+        margin-top: 56px;
+      }
+      h2 {
+        margin: 0 0 16px;
+        font-size: 1.3rem;
+        letter-spacing: -0.01em;
+      }
+      .features {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 20px;
+        padding: 0;
+        list-style: none;
+      }
+      .features li {
+        padding: 18px 20px;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg-alt);
+      }
+      .features strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--accent);
+      }
+      .features span {
+        color: var(--fg-dim);
+        font-size: 0.94rem;
+      }
+
+      /* Keys */
+      .keys {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.94rem;
+      }
+      .keys td {
+        padding: 8px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      .keys td:first-child {
+        width: 34%;
+        white-space: nowrap;
+      }
+      .keys tr:last-child td {
+        border-bottom: 0;
+      }
+      kbd {
+        display: inline-block;
+        padding: 2px 7px;
+        border: 1px solid var(--border);
+        border-bottom-width: 2px;
+        border-radius: 5px;
+        background: var(--bg-alt);
+        font-size: 0.85em;
+      }
+
+      .prose {
+        color: var(--fg-dim);
+      }
+      .prose a {
+        color: var(--accent-dim);
+      }
+
+      footer {
+        margin-top: 72px;
+        padding-top: 24px;
+        border-top: 1px solid var(--border);
+        color: var(--fg-dim);
+        font-size: 0.9rem;
+        text-align: center;
+      }
+      footer a {
+        color: inherit;
+      }
+
+      .table-scroll {
+        overflow-x: auto;
+      }
+    </style>
+  </head>
+
+  <body>
+    <main>
+      <header class="hero">
+        <img src="assets/dimnav-logo.png" alt="dimnav" width="260" />
+        <h1>Two panels. No mouse.</h1>
+        <p>
+          A fast, keyboard-first file manager for macOS, in the Norton Commander
+          lineage. Free and open source.
+        </p>
+
+        <div class="download">
+          <!-- Href is rewritten to the exact .dmg asset once the release feed
+               loads; until then it points at the releases page, which is also
+               what a visitor with JavaScript disabled follows. -->
+          <a
+            class="btn"
+            id="download"
+            href="https://github.com/pichugin/dimnav/releases/latest"
+            >Download for macOS</a
+          >
+          <p class="meta">
+            <span id="release-meta">Universal · Apple Silicon and Intel · macOS 10.15+</span><br />
+            Signed and notarized by Apple — no security warnings.
+          </p>
+        </div>
+      </header>
+
+      <section>
+        <h2>What it does</h2>
+        <ul class="features">
+          <li>
+            <strong>Two panels</strong>
+            <span
+              >Source and destination on screen at once. Each panel keeps its own
+              columns, sort order, and hidden-file setting between launches.</span
+            >
+          </li>
+          <li>
+            <strong>One key per operation</strong>
+            <span
+              >Copy, move, rename, delete. Asynchronous, cancellable, with real
+              progress and sane collision handling.</span
+            >
+          </li>
+          <li>
+            <strong>Built-in terminal</strong>
+            <span
+              >Command history, sharing the panel's working directory. No context
+              switch to get a shell.</span
+            >
+          </li>
+          <li>
+            <strong>Viewer and editor</strong>
+            <span
+              ><kbd>F3</kbd> and <kbd>F4</kbd> open a file in place, including a hex
+              mode. Large files stay responsive.</span
+            >
+          </li>
+          <li>
+            <strong>Native, not a web page</strong>
+            <span
+              >A Rust core with a thin rendering layer. Small download, quick
+              launch, low memory.</span
+            >
+          </li>
+          <li>
+            <strong>Permission handled properly</strong>
+            <span
+              >When an operation needs privileges, macOS asks — the app never sees
+              your password.</span
+            >
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>The keys that matter</h2>
+        <div class="table-scroll">
+          <table class="keys">
+            <tbody>
+              <tr>
+                <td><kbd>Tab</kbd></td>
+                <td>Switch panel</td>
+              </tr>
+              <tr>
+                <td><kbd>Enter</kbd> / <kbd>Backspace</kbd></td>
+                <td>Enter a directory / go up, landing on the folder you left</td>
+              </tr>
+              <tr>
+                <td><kbd>Space</kbd></td>
+                <td>Select</td>
+              </tr>
+              <tr>
+                <td><kbd>F3</kbd> / <kbd>F4</kbd></td>
+                <td>View / edit</td>
+              </tr>
+              <tr>
+                <td><kbd>F5</kbd> / <kbd>F6</kbd></td>
+                <td>Copy / move</td>
+              </tr>
+              <tr>
+                <td><kbd>F7</kbd> / <kbd>F8</kbd></td>
+                <td>New folder / delete</td>
+              </tr>
+              <tr>
+                <td><kbd>⌘F</kbd> / <kbd>⌘T</kbd></td>
+                <td>Quick search / terminal</td>
+              </tr>
+              <tr>
+                <td><kbd>F1</kbd></td>
+                <td>Every other shortcut</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section>
+        <h2>Open source</h2>
+        <p class="prose">
+          dimnav is MIT licensed and developed in the open. Read the source, file
+          an issue, or send a patch on
+          <a href="https://github.com/pichugin/dimnav">GitHub</a>. If it saves you
+          time, you can
+          <a href="https://github.com/sponsors/pichugin">sponsor its development</a>.
+        </p>
+      </section>
+
+      <footer>
+        <p>
+          <a href="https://github.com/pichugin/dimnav">GitHub</a> ·
+          <a href="https://github.com/pichugin/dimnav/releases">Releases</a> ·
+          <a href="https://github.com/sponsors/pichugin">Sponsor</a>
+        </p>
+        <p>MIT licensed. © 2026 Dmitry Pichugin.</p>
+      </footer>
+    </main>
+
+    <script>
+      // Resolve the actual .dmg for the latest release. GitHub's
+      // /releases/latest/download/<name> shortcut needs an exact filename, but
+      // Tauri stamps the version into it, so the name is only knowable at
+      // runtime. Failure is silent: the button already points somewhere useful.
+      (async () => {
+        try {
+          const res = await fetch(
+            "https://api.github.com/repos/pichugin/dimnav/releases/latest",
+            { headers: { Accept: "application/vnd.github+json" } },
+          );
+          if (!res.ok) return;
+
+          const release = await res.json();
+          const dmg = (release.assets || []).find((a) => a.name.endsWith(".dmg"));
+          if (!dmg) return;
+
+          document.getElementById("download").href = dmg.browser_download_url;
+
+          const size = (dmg.size / 1024 / 1024).toFixed(1);
+          const version = (release.tag_name || "").replace(/^v/, "");
+          document.getElementById("release-meta").textContent =
+            `Version ${version} · ${size} MB · Universal · macOS 10.15+`;
+        } catch {
+          /* offline, rate-limited, or no release yet — leave the fallback */
+        }
+      })();
+    </script>
+  </body>
+</html>

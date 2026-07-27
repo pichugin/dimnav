@@ -408,7 +408,7 @@ const MAX_DIR_DEPTH: usize = 4096;
 /// - Deduplicates hardlinks by `(dev, ino)` on unix, so each physical inode is
 ///   counted once (accurate, `du`-like) — this also doubles as an extra cycle
 ///   guard for exotic layouts (bind mounts, etc.).
-/// Unreadable subdirectories are skipped rather than aborting the walk.
+/// - Unreadable subdirectories are skipped rather than aborting the walk.
 pub fn dir_size(path: &Path) -> (u64, i64) {
     let root_mtime = fs::symlink_metadata(path).map(|m| mtime_secs(&m)).unwrap_or(0);
 
@@ -469,15 +469,10 @@ pub fn dir_mtime(path: &Path) -> Option<i64> {
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Create a unique temp directory with a known layout, returning its path.
     fn make_fixture() -> std::path::PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("fm_core_fs_test_{nanos}"));
+        let dir = crate::testutil::unique_dir("fm_core_fs_test");
         fs::create_dir_all(dir.join("Beta")).unwrap();
         fs::create_dir_all(dir.join("alpha")).unwrap();
         let mut f = fs::File::create(dir.join("gamma.txt")).unwrap();
@@ -606,11 +601,7 @@ mod tests {
 
     #[test]
     fn dir_size_sums_recursively_and_survives_symlink_loops() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("fm_core_dirsize_{nanos}"));
+        let root = crate::testutil::unique_dir("fm_core_dirsize");
         fs::create_dir_all(root.join("sub/deep")).unwrap();
 
         // Known byte sizes at several depths.
@@ -635,12 +626,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn dir_size_dedups_hardlinks() {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("fm_core_dirsize_hl_{nanos}"));
-        fs::create_dir_all(&root).unwrap();
+        let root = crate::testutil::unique_dir("fm_core_dirsize_hl");
         fs::write(root.join("orig.bin"), vec![0u8; 500]).unwrap();
         fs::hard_link(root.join("orig.bin"), root.join("link.bin")).unwrap();
 

@@ -236,6 +236,12 @@ impl Session {
             // no rows, but the page still carries the status-line facts.
             ViewerMode::Image => (Vec::new(), Vec::new()),
         };
+        // Clippy reads this as a hand-rolled checked_div, but the guarded branch
+        // also clamps, scales, and narrows — folding it into checked_div would
+        // need the same expression back inside a map(), for no gain. An empty
+        // file is 100% read, not 0%, so the zero case is a real answer rather
+        // than a division to be skipped.
+        #[allow(clippy::manual_checked_ops)]
         let percent = if self.probe.size == 0 {
             100
         } else {

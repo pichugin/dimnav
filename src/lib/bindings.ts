@@ -24,11 +24,49 @@ export const commands = {
 	 *  matching are the core's: this only supplies the packaging metadata, which is
 	 *  the one thing `fm-core` cannot know about itself.
 	 * 
-	 *  `package_info()` resolves to the bundle's `productName` and `version` from
-	 *  `tauri.conf.json` — the identity a shipped app actually presents — while the
-	 *  one-line description comes from the crate manifest.
+	 *  `package_info()` resolves to the bundle's `productName` from `tauri.conf.json`
+	 *  and its `version` — which, since `tauri.conf.json` omits `version`, the
+	 *  bundler takes from `Cargo.toml`, making the workspace manifest the single
+	 *  source of truth. The remaining fields come straight from that same manifest,
+	 *  so there is no hand-maintained copy of any of this to drift.
 	 */
 	getHelp: (query: string) => __TAURI_INVOKE<HelpBook>("get_help", { query }),
+	/**
+	 *  Open one of the About topic's links in the user's browser (§6).
+	 * 
+	 *  Restricted to `http`/`https` on purpose. The webview only ever passes URLs the
+	 *  core just handed it, but this command is reachable from any frontend code, and
+	 *  the opener plugin will happily launch `file://` paths or custom schemes —
+	 *  which is a local-file-execution primitive, not a browser link. Narrowing the
+	 *  scheme here keeps that door shut regardless of what the renderer does.
+	 */
+	openLink: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_link", { url })),
+	/**
+	 *  Ask the update feed whether a newer release exists (§ release process).
+	 * 
+	 *  `Ok(None)` means "up to date" *and* "could not tell" — the two are
+	 *  deliberately not distinguished. This runs unprompted at startup, and a laptop
+	 *  that is offline, behind a captive portal, or simply ahead of a not-yet-created
+	 *  release must not produce an error the user has to dismiss. Real failures are
+	 *  still worth seeing while developing, so they are logged.
+	 * 
+	 *  Updates are verified against the public key in `tauri.conf.json` before
+	 *  anything is written to disk; an unsigned or mis-signed payload fails here
+	 *  rather than being installed.
+	 */
+	checkUpdate: () => typedError<{
+	version: string,
+	/**  Release notes from the feed. Often empty; the renderer must cope. */
+	notes: string,
+} | null, string>(__TAURI_INVOKE("check_update")),
+	/**
+	 *  Download, verify, install the pending update, then relaunch into it.
+	 * 
+	 *  Unlike [`check_update`] this is user-initiated, so failures are surfaced: the
+	 *  user pressed a button and is owed an answer. Does not return on success — the
+	 *  process is replaced by the new build.
+	 */
+	installUpdate: () => typedError<null, string>(__TAURI_INVOKE("install_update")),
 	/**
 	 *  Load the persisted configuration and populate both panels from it — each panel
 	 *  reopens its last directory with its own view/sort/hidden state (§5.8 / §7),
@@ -295,10 +333,19 @@ export const events = {
 };
 
 /* Types */
-/**  The About topic: who the app is, plus a few label/value facts. */
+/**
+ *  The About topic: who the app is, plus a few label/value facts and the
+ *  project's outbound links.
+ */
 export type AboutBody = {
 	app: AppInfo,
 	lines: HelpLine[],
+	/**
+	 *  Rendered as activatable rows, separately from [`Self::lines`], so the
+	 *  renderer never has to guess which values happen to be URLs. Already
+	 *  filtered — an unset link is absent here, not empty.
+	 */
+	links: HelpLink[],
 };
 
 /**
@@ -307,10 +354,21 @@ export type AboutBody = {
  *  has no packaging of its own to read.
  */
 export type AppInfo = {
-	/**  Display name, e.g. `"File Manager"` — the product name, not the crate. */
+	/**  Display name, e.g. `"dimnav"` — the product name, not the crate. */
 	name: string,
 	version: string,
 	description: string,
+	/**  SPDX identifier, e.g. `"MIT"`. */
+	license: string,
+	/**
+	 *  Project website. Empty string when unset — the About topic omits the row
+	 *  rather than rendering a dead link.
+	 */
+	homepage: string,
+	/**  Source repository. Empty string when unset. */
+	repository: string,
+	/**  Where to support the project financially. Empty string when unset. */
+	sponsor: string,
 };
 
 /**
@@ -518,6 +576,15 @@ export type HelpBook = {
 export type HelpLine = {
 	label: string,
 	value: string,
+};
+
+/**
+ *  One outbound link. Opened through the OS browser by the adapter, never
+ *  navigated to inside the webview.
+ */
+export type HelpLink = {
+	label: string,
+	url: string,
 };
 
 /**  One topic, as it appears in the left-hand rail plus the body it renders. */
@@ -939,6 +1006,13 @@ export type TerminalStatus =
 export type TextEncoding = "utf8" | 
 /**  UTF-8 with a byte-order mark, which must be preserved on save. */
 "utf8_bom" | "utf16_le" | "utf16_be" | "latin1";
+
+/**  A newer release than the one running, as advertised by the update feed. */
+export type UpdateInfo = {
+	version: string,
+	/**  Release notes from the feed. Often empty; the renderer must cope. */
+	notes: string,
+};
 
 /**
  *  Per-panel view mode. `Columns(n)` covers the brief multi-column modes

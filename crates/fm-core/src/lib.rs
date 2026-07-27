@@ -40,3 +40,6 @@ pub mod state;
 pub mod terminal;
 pub mod types;
 pub mod view;
+
+#[cfg(test)]
+mod testutil;

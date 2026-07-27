@@ -22,6 +22,9 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::get_config,
             commands::get_keymap,
             commands::get_help,
+            commands::open_link,
+            commands::check_update,
+            commands::install_update,
             commands::init,
             commands::set_viewport,
             commands::move_cursor,
@@ -117,6 +120,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Shared navigation state lives in fm-core; the adapter just wraps it in
         // a Mutex and hands it to Tauri as managed state.
         .manage(commands::SharedState::default())

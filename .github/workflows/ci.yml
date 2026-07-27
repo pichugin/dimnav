@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to a PR makes the in-flight run pointless; don't pay for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    # macOS because that is the only platform dimnav currently supports: the
+    # terminal is unix-only and privilege elevation and file-opening are
+    # macOS-only, so a Linux runner would not exercise the real code paths.
+    runs-on: macos-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # No toolchain action: rust-toolchain.toml already pins the channel and the
+      # targets, and rustup installs from it on first use. Doing it in an
+      # explicit step means the download shows up as itself in the log rather
+      # than as a slow `cargo test`.
+      - name: Install the pinned Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - name: Typecheck the frontend
+        run: npm run check
+
+      # No `cargo fmt --check` gate on purpose. This codebase is hand-formatted,
+      # and deliberately so — see the action catalog in
+      # crates/fm-core/src/actions/mod.rs, whose one-line rows form a readable
+      # table that rustfmt would explode into five lines each. No max_width
+      # reconciles the two (a wider setting makes it worse, because rustfmt then
+      # wants to collapse things that are split for clarity), so enforcing it
+      # would mean reformatting the tree against its author's intent.
+
+      # Deny warnings so lint debt cannot accumulate quietly. --all-targets
+      # includes tests, which is where sloppiness usually lands.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      # The generated bindings are committed so the frontend typechecks without a
+      # Rust build. That only works if they are actually current — regenerate and
+      # fail if the tree moves, which catches a DTO change that skipped
+      # `npm run bindings`.
+      - name: Verify the IPC bindings are up to date
+        run: |
+          npm run bindings
+          git diff --exit-code src/lib/bindings.ts \
+            || { echo "::error::src/lib/bindings.ts is stale — run 'npm run bindings' and commit the result"; exit 1; }

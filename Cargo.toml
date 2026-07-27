@@ -2,10 +2,18 @@
 resolver = "2"
 members = ["crates/fm-core", "src-tauri"]
 
+# Single source of truth for the app version. `src-tauri/Cargo.toml` inherits it,
+# and tauri.conf.json deliberately omits `version` so the bundler falls back to
+# the crate version (tauri-utils config.rs: "If removed the version number from
+# Cargo.toml is used"). Bump here and nowhere else — `npm run bump` syncs
+# package.json to match.
 [workspace.package]
 edition = "2021"
 version = "0.1.0"
 license = "MIT"
+authors = ["Dmitry Pichugin"]
+homepage = "https://dimnav.com"
+repository = "https://github.com/pichugin/dimnav"
 
 # Shared dependency versions so the core and the Tauri adapter agree on the
 # serialization/type-export stack that defines the IPC contract.

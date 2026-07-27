@@ -821,10 +821,19 @@ impl Default for Config {
 /// has no packaging of its own to read.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, Type)]
 pub struct AppInfo {
-    /// Display name, e.g. `"File Manager"` — the product name, not the crate.
+    /// Display name, e.g. `"dimnav"` — the product name, not the crate.
     pub name: String,
     pub version: String,
     pub description: String,
+    /// SPDX identifier, e.g. `"MIT"`.
+    pub license: String,
+    /// Project website. Empty string when unset — the About topic omits the row
+    /// rather than rendering a dead link.
+    pub homepage: String,
+    /// Source repository. Empty string when unset.
+    pub repository: String,
+    /// Where to support the project financially. Empty string when unset.
+    pub sponsor: String,
 }
 
 /// The whole help book: every topic, already rendered and filtered. The frontend
@@ -854,11 +863,16 @@ pub enum HelpBody {
     Shortcuts(ShortcutsBody),
 }
 
-/// The About topic: who the app is, plus a few label/value facts.
+/// The About topic: who the app is, plus a few label/value facts and the
+/// project's outbound links.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct AboutBody {
     pub app: AppInfo,
     pub lines: Vec<HelpLine>,
+    /// Rendered as activatable rows, separately from [`Self::lines`], so the
+    /// renderer never has to guess which values happen to be URLs. Already
+    /// filtered — an unset link is absent here, not empty.
+    pub links: Vec<HelpLink>,
 }
 
 /// One label/value row.
@@ -866,6 +880,14 @@ pub struct AboutBody {
 pub struct HelpLine {
     pub label: String,
     pub value: String,
+}
+
+/// One outbound link. Opened through the OS browser by the adapter, never
+/// navigated to inside the webview.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct HelpLink {
+    pub label: String,
+    pub url: String,
 }
 
 /// The Shortcuts topic: the live keymap, grouped and filtered.

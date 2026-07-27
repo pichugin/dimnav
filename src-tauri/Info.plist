@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Merged into the generated bundle Info.plist by the Tauri bundler, which picks
+	  this file up automatically because it sits beside tauri.conf.json.
+
+	  These are the TCC (Transparency, Consent and Control) usage strings. macOS
+	  shows them verbatim in the permission prompt the first time the app touches a
+	  protected location. Without them the prompt is blank — and on recent macOS a
+	  missing string can cause the request to be denied outright rather than asked.
+
+	  A file manager hits these constantly, and SPEC §3 makes access-denied a
+	  first-class state, so every location the panels can reach is covered here.
+	  Note the app also reaches them indirectly: a command typed into the built-in
+	  terminal runs as a child process, and macOS attributes its TCC prompts back to
+	  dimnav as the responsible process.
+	-->
+	<key>NSDesktopFolderUsageDescription</key>
+	<string>dimnav needs access to your Desktop folder to browse and manage the files in it.</string>
+
+	<key>NSDocumentsFolderUsageDescription</key>
+	<string>dimnav needs access to your Documents folder to browse and manage the files in it.</string>
+
+	<key>NSDownloadsFolderUsageDescription</key>
+	<string>dimnav needs access to your Downloads folder to browse and manage the files in it.</string>
+
+	<key>NSRemovableVolumeUsageDescription</key>
+	<string>dimnav needs access to removable volumes to browse and manage the files on them.</string>
+
+	<key>NSNetworkVolumesUsageDescription</key>
+	<string>dimnav needs access to network volumes to browse and manage the files on them.</string>
+
+	<key>NSFileProviderDomainUsageDescription</key>
+	<string>dimnav needs access to cloud-synced folders to browse and manage the files in them.</string>
+
+	<!--
+	  Declares that dimnav uses no non-exempt encryption. Required for App Store
+	  Connect submissions and harmless otherwise; it also short-circuits the
+	  export-compliance question if a store listing is ever added.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+</dict>
+</plist>

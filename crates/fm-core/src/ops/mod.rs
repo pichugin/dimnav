@@ -893,7 +893,6 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     /// Scripted observer: returns queued collision/error answers in order and
     /// records progress calls. Cancels once `cancel_after` progress ticks elapse.
@@ -964,13 +963,7 @@ mod tests {
     }
 
     fn tmp() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("fm_core_ops_{nanos}_{:p}", &nanos));
-        fs::create_dir_all(&dir).unwrap();
-        dir
+        crate::testutil::unique_dir("fm_core_ops")
     }
 
     fn write(path: &Path, contents: &str) {

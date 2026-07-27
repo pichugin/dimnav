@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Lets you rehearse the whole pipeline against a branch without minting a tag.
+  # Produces an unsigned build unless the secrets are present.
+  workflow_dispatch:
+
+jobs:
+  release:
+    permissions:
+      # tauri-action creates the release and uploads the bundles.
+      contents: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            # One universal binary rather than two downloads: Apple Silicon and
+            # Intel in a single .dmg.
+            args: --target universal-apple-darwin
+
+          # Phase 4 (docs/SPEC.md). Deliberately not enabled: the terminal is
+          # #[cfg(unix)]-gated and privilege elevation plus file-opening are
+          # #[cfg(target_os = "macos")], so these runners would package a
+          # knowingly crippled app. Uncomment once those platforms are actually
+          # implemented — the rest of this workflow already handles them.
+          #
+          # - platform: ubuntu-22.04
+          #   args: ""
+          # - platform: windows-latest
+          #   args: ""
+
+    runs-on: ${{ matrix.platform }}
+    # Apple's notarization service usually answers in 2-5 minutes but has been
+    # known to take 20+. Generous, so a slow queue does not fail a release.
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      # rust-toolchain.toml pins the channel and both macOS targets, so rustup
+      # resolves everything from the repo — nothing to keep in sync here.
+      - name: Install the pinned Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      # notarytool wants the App Store Connect key as a file on disk, but a
+      # secret is a string. Written outside the workspace so it can never be
+      # swept into a bundle.
+      - name: Stage the notarization key
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          # Guarded in the shell rather than in `if:` — a step's own env block is
+          # not in scope for its own condition, so testing it there silently
+          # evaluates to empty and skips the step forever.
+          if [ -z "$APPLE_API_KEY_BASE64" ]; then
+            echo "::warning::No notarization key configured — this build will not be notarized."
+            exit 0
+          fi
+          mkdir -p ~/private_keys
+          echo "$APPLE_API_KEY_BASE64" | base64 --decode > ~/private_keys/AuthKey.p8
+          chmod 600 ~/private_keys/AuthKey.p8
+          echo "APPLE_API_KEY_PATH=$HOME/private_keys/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # Code signing. APPLE_CERTIFICATE is the base64 of the exported .p12
+          # holding the Developer ID Application certificate and its private key.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          # Any strong random string; it only protects the throwaway keychain
+          # this job creates.
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+
+          # Notarization via App Store Connect API key. Preferred over the
+          # Apple-ID + app-specific-password route: nothing expires on a
+          # password-rotation schedule and there is no 2FA in the loop.
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+
+          # Signs the update artifacts so the updater can verify them. Absent
+          # until the updater is switched on; harmless while empty.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: dimnav ${{ github.ref_name }}
+          releaseBody: |
+            See [CHANGELOG](https://github.com/pichugin/dimnav/blob/main/CHANGELOG.md).
+
+            The macOS build is signed and notarized, so it opens without a
+            Gatekeeper warning. Universal — Apple Silicon and Intel.
+          # Draft, so a release is never published by a stray tag: you review the
+          # attached bundles and write the notes before anyone can download it.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

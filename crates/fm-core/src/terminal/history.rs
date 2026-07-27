@@ -82,6 +82,11 @@ impl History {
 
     /// Step forwards (Down). Past the newest entry this returns the saved draft
     /// once, then `None`.
+    // Named for its pair with `prev`, which is what a shell history reads like.
+    // Clippy suggests implementing Iterator instead, but this is a cursor the
+    // user drives in both directions, not a one-way sequence — and it is stateful
+    // in a way Iterator's contract does not describe.
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Option<String> {
         match self.offset {
             0 => None,
@@ -117,6 +122,10 @@ pub fn history_path() -> Option<PathBuf> {
 /// Load the persisted history, or an empty list. Never fails: an unreadable
 /// history file must not stop the app from starting, exactly like the config.
 pub fn load() -> History {
+    // History lives inside the config directory, so it has to be read *after*
+    // any pending rename of that directory — and nothing guarantees the config
+    // is loaded first. Idempotent, so calling it here costs nothing.
+    crate::config::ensure_migrated();
     history_path()
         .map(|p| load_from(&p))
         .unwrap_or_default()
@@ -160,16 +169,9 @@ pub fn save_to(path: &Path, history: &History) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp_path() -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir()
-            .join(format!("fm_core_hist_{nanos}"))
-            .join(FILE_NAME)
+        crate::testutil::unique_dir("fm_core_hist").join(FILE_NAME)
     }
 
     fn history(cmds: &[&str]) -> History {

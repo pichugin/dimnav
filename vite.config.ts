@@ -23,6 +23,10 @@ export default defineConfig({
   // Produce a browser bundle Tauri can load; `frontendDist` points at `dist`.
   build: {
     target: "esnext",
-    sourcemap: true,
+    // Off: this only governs `vite build`, whose output ships inside the .app,
+    // so maps here mean shipping readable frontend source and a bigger download
+    // for something no end user can act on. The dev server is unaffected — it
+    // generates its own sourcemaps through the transform pipeline.
+    sourcemap: false,
   },
 });
