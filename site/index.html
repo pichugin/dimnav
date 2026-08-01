@@ -238,7 +238,7 @@
             >Download for macOS</a
           >
           <p class="meta">
-            <span id="release-meta">Universal · Apple Silicon and Intel · macOS 10.15+</span><br />
+            <span id="release-meta">Apple Silicon · macOS 13+</span><br />
             Signed and notarized by Apple — no security warnings.
           </p>
         </div>
@@ -377,7 +377,7 @@
           const size = (dmg.size / 1024 / 1024).toFixed(1);
           const version = (release.tag_name || "").replace(/^v/, "");
           document.getElementById("release-meta").textContent =
-            `Version ${version} · ${size} MB · Universal · macOS 10.15+`;
+            `Version ${version} · ${size} MB · Apple Silicon · macOS 13+`;
         } catch {
           /* offline, rate-limited, or no release yet — leave the fallback */
         }

@@ -10,6 +10,7 @@
   --border: #34343a;
   --accent: #3b7dd8;
   --accent-fg: #ffffff;
+  --accent-dim: rgba(59, 125, 216, 0.35); /* --accent at 35% */
 
   /* Per-entry listing colors (SPEC §4/§7 — theme-swappable). */
   --file-dir: #6fb3e0; /* folders: light blue */
@@ -40,6 +41,7 @@
     --border: #dcdcd8;
     --accent: #2f6fce;
     --accent-fg: #ffffff;
+    --accent-dim: rgba(47, 111, 206, 0.35);
 
     /* Darker variants for contrast on the light background. */
     --file-dir: #2f6fce;

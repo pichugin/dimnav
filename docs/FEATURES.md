@@ -215,7 +215,7 @@ security-scoped bookmarks on every panel path.
       (`rust-toolchain.toml`, `.nvmrc`) for reproducible CI builds
 - [x] CI on every PR: clippy under `-D warnings`, the full test suite, the Svelte
       typecheck, and a guard that fails if `bindings.ts` is stale
-- [x] Tag-triggered release workflow producing a signed, notarized universal
+- [x] Tag-triggered release workflow producing a signed, notarized Apple Silicon
       `.dmg` as a **draft** release. Linux and Windows jobs are present but
       commented out until those platforms are actually implemented
 - [x] Signed auto-updates against the GitHub release feed

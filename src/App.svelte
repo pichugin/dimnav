@@ -2027,7 +2027,7 @@
      panel stays *active* (it still decides the terminal's cwd and where
      Ctrl+Enter takes names from); it just isn't where the keys are going. */
   .panel.active.dimmed {
-    border-top-color: color-mix(in srgb, var(--accent) 35%, transparent);
+    border-top-color: var(--accent-dim);
   }
 
   .panel-head,

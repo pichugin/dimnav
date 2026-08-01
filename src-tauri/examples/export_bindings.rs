@@ -6,11 +6,9 @@
 //! bindings`).
 //!
 //! An **example** rather than a second `[[bin]]` on purpose: Tauri's bundler
-//! copies every binary target in the package into the `.app`, but
-//! `--target universal-apple-darwin` only lipos the main binary. A second bin
-//! therefore fails the bundle step with "does not exist" — and only on the
-//! universal target, which is exactly what release CI builds and what a plain
-//! local `tauri build` does not.
+//! copies every binary target in the package into the `.app`, so a second bin
+//! would ship a developer tool inside the released bundle — dead weight that
+//! also has to be signed and notarized along with everything else.
 
 fn main() {
     #[cfg(debug_assertions)]

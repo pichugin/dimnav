@@ -12,8 +12,8 @@ license.workspace = true
 homepage.workspace = true
 repository.workspace = true
 # Only one binary — `export_bindings` is an example, because Tauri's bundler
-# copies every bin target into the .app and the universal build only produces the
-# main one. Kept anyway so `cargo run` stays unambiguous if a bin is ever added.
+# copies every bin target into the .app, and a bindings exporter has no business
+# shipping there. Kept anyway so `cargo run` stays unambiguous if a bin is added.
 default-run = "dimnav"
 
 # The `_lib` suffix keeps the lib name distinct from the bin (a Windows quirk;

@@ -18,9 +18,10 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            # One universal binary rather than two downloads: Apple Silicon and
-            # Intel in a single .dmg.
-            args: --target universal-apple-darwin
+            # Apple Silicon only. macos-latest runners are arm64, so this
+            # builds natively; the x86_64 half of the old universal bundle
+            # was a cross-compile.
+            args: --target aarch64-apple-darwin
 
           # Phase 4 (docs/SPEC.md). Deliberately not enabled: the terminal is
           # #[cfg(unix)]-gated and privilege elevation plus file-opening are
@@ -105,7 +106,7 @@ jobs:
             See [CHANGELOG](https://github.com/pichugin/dimnav/blob/main/CHANGELOG.md).
 
             The macOS build is signed and notarized, so it opens without a
-            Gatekeeper warning. Universal — Apple Silicon and Intel.
+            Gatekeeper warning. Apple Silicon (M-series), macOS 13 or later.
           # Draft, so a release is never published by a stray tag: you review the
           # attached bundles and write the notes before anyone can download it.
           releaseDraft: true

@@ -22,9 +22,8 @@ Download the latest `.dmg` from the [releases page][latest], open it, and drag
 dimnav to Applications.
 
 Builds are signed with a Developer ID certificate and notarized by Apple, so
-they open without Gatekeeper warnings. Requires **macOS 10.15** or later; the
-download is a universal binary that runs natively on both Apple Silicon and
-Intel.
+they open without Gatekeeper warnings. Requires **macOS 13** or later on an
+**Apple Silicon** Mac; Intel is not supported.
 
 ## Why
 

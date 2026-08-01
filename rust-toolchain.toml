@@ -1,7 +1,7 @@
 # Pinned so a release built on CI is bit-for-bit reproducible against a local
-# build. Both macOS targets are listed because releases ship a universal binary
-# (`--target universal-apple-darwin` lipos the two together).
+# build. Apple Silicon only — releases ship a single arm64 slice, and CI runs on
+# arm64 runners, so this is the host target rather than a cross-compile.
 [toolchain]
 channel = "1.97.1"
 components = ["rustfmt", "clippy"]
-targets = ["aarch64-apple-darwin", "x86_64-apple-darwin"]
+targets = ["aarch64-apple-darwin"]
