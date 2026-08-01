@@ -48,11 +48,12 @@ Before opening a pull request:
 ```bash
 cargo test --workspace     # must pass
 cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all --check
 npm run check              # Svelte/TypeScript typecheck
 ```
 
-CI runs exactly these.
+CI runs exactly these, plus a guard that fails if `src/lib/bindings.ts` is stale. There is
+no `cargo fmt` gate — the codebase is hand-formatted in places where rustfmt would hurt
+readability.
 
 ### Changing the IPC contract
 
@@ -97,6 +98,11 @@ disappears.
 - Add tests for logic in the core. It is pure and fast to test, which is much of
   the reason the boundary exists.
 - If behaviour changes, update `docs/FEATURES.md` in the same PR.
+
+## Releasing
+
+`docs/RELEASE.md` — the tag-triggered pipeline, the signing secrets, and what to verify
+before publishing a draft.
 
 ## Reporting bugs
 

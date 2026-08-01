@@ -221,7 +221,8 @@ security-scoped bookmarks on every panel path.
 - [x] Signed auto-updates against the GitHub release feed
 - [x] Static site in `site/`, deployed to GitHub Pages, resolving the current
       download from the releases API with a no-JS fallback
-- [ ] Apple Developer Program enrolment and the signing secrets (manual, external)
+- [x] Apple Developer Program enrolment and the signing secrets (manual, external) —
+      procedure and the secret inventory are in `docs/RELEASE.md`
 - [ ] A screenshot for the README and the site
 
 ---
