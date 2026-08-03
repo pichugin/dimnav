@@ -88,9 +88,14 @@ Then, by hand:
 cargo test --workspace && npm run check    # what CI will run anyway
 git commit -am "release: v0.2.0"
 git push origin main
-git tag v0.2.0 && git push origin v0.2.0
+git tag -a v0.2.0 -m "dimnav 0.2.0" && git push origin v0.2.0
 gh run watch
 ```
+
+Tag with `-a`. GitHub Releases treat an annotated and a lightweight tag identically, but
+only an annotated tag is a real object carrying a tagger and a date, and only those are
+found by `git describe` or ordered by `--sort=taggerdate`. A lightweight tag cannot be
+upgraded in place once pushed.
 
 Only plain `MAJOR.MINOR.PATCH` is accepted, enforced at `scripts/bump-version.mjs:29`.
 On macOS the version becomes `CFBundleShortVersionString`, where a malformed value is
@@ -178,6 +183,28 @@ the certificate on its own.
 
 **Notarization rejected for an invalid version** — a non-semver version reached
 `CFBundleShortVersionString`. Fix the version, retag.
+
+**`Error: The operation was canceled` with `Notarizing …` as the last line** — nothing
+failed. GitHub killed the runner at `timeout-minutes`, and the job spent its whole life
+blocked on Apple. The build, the signing, and the upload all succeeded; only the verdict
+never came.
+
+The submission outlives the runner, so ask Apple directly rather than re-running blind:
+
+```bash
+xcrun notarytool history --key <p8> --key-id <id> --issuer <uuid>
+xcrun notarytool info <submission-id> --key <p8> --key-id <id> --issuer <uuid>
+```
+
+`In Progress` for hours means the upload was held for in-depth analysis. Apple does this
+to submissions it does not recognise — which, unavoidably, includes an account's first
+ever notarization. **Do not re-run while a submission is held: subsequent submissions from
+the same team queue behind it**, so each retry costs another full build and adds another
+stuck entry. Wait for the verdict, then re-run. Apple's stated behaviour is that the
+service learns to recognise an app, so later releases clear in the usual 2–5 minutes.
+
+Apple's system status page reports the Notary Service healthy during these holds — it
+tracks outages, not queue latency. It is not a useful signal here.
 
 **Re-running a failed tag** — delete the draft release and the tag, then push it again:
 
