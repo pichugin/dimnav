@@ -127,10 +127,14 @@ Four assets, every time:
 
 ```
 dimnav_<version>_aarch64.dmg
-dimnav.app.tar.gz
-dimnav.app.tar.gz.sig
+dimnav_aarch64.app.tar.gz
+dimnav_aarch64.app.tar.gz.sig
 latest.json
 ```
+
+The updater artifacts carry the target triple in the name even though the bundler writes
+the inner archive as plain `dimnav.app.tar.gz` — check the asset names on the release,
+not the `file:` field inside the signature.
 
 A missing `.sig` or `latest.json` means the updater key never reached the bundler. Do not
 publish — clients would see no update at all, or worse, a `latest.json` pointing at an
@@ -140,9 +144,13 @@ Then check Gatekeeper against the actual downloaded artifact, not the build dire
 This is what catches a bundle that is correctly signed but never stapled, which fails only
 on machines that cannot reach Apple's servers:
 
+`bundle.licenseFile` puts a click-through agreement on the DMG, so a bare `hdiutil attach`
+prints the licence and exits with `attach canceled` — it is waiting on stdin. Feed it one
+`Y`. Not `yes |`: that floods the pipe and the attach fails just as silently.
+
 ```bash
 gh release download v0.2.0 -p '*.dmg'
-hdiutil attach dimnav_0.2.0_aarch64.dmg
+echo Y | hdiutil attach dimnav_0.2.0_aarch64.dmg
 spctl -a -vvv -t install /Volumes/dimnav/dimnav.app   # accepted, source=Notarized Developer ID
 codesign -dv --verbose=4 /Volumes/dimnav/dimnav.app   # Authority=Developer ID Application …; flags=0x10000(runtime)
 xcrun stapler validate /Volumes/dimnav/dimnav.app     # The validate action worked!

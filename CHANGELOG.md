@@ -4,6 +4,8 @@ All notable changes to dimnav are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
 ## [0.1.0] - 2026-08-01
 
 First public release.
@@ -28,4 +30,5 @@ First public release.
 - F1 help: an About topic and a shortcut list generated from the live keymap.
 - Signed in-app updates, surfaced in Help → About.
 
+[Unreleased]: https://github.com/pichugin/dimnav/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/pichugin/dimnav/releases/tag/v0.1.0
