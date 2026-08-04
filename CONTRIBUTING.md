@@ -99,6 +99,17 @@ disappears.
   the reason the boundary exists.
 - If behaviour changes, update `docs/FEATURES.md` in the same PR.
 
+`main` is protected: it cannot be deleted or force-pushed, and a change lands through a
+pull request whose `check` run is green. Zero approvals are required, because a sole
+maintainer cannot review their own work into existence — the gate is CI, not a second
+opinion.
+
+The maintainer holds an admin bypass and uses it for release commits and documentation.
+That is deliberate, not an oversight: `docs/RELEASE.md` pushes the version commit to
+`main` directly, and routing it through a squash merge would rewrite the SHA out from
+under the tag that has to follow it. Changes to behaviour go through a pull request like
+everyone else's.
+
 ## Releasing
 
 `docs/RELEASE.md` — the tag-triggered pipeline, the signing secrets, and what to verify
