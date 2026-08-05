@@ -185,6 +185,11 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         // system shortcuts (which use Cmd) or the bindings above. Printable keys
         // carry no `Shift` in a chord, and `KeyboardEvent.key` reports them
         // lower-case, hence `Ctrl+h` rather than `Ctrl+H`.
+        // Ctrl+R, not Cmd+R, for two reasons: it follows the rule above (Cmd is
+        // reserved for chords that mirror a real macOS system shortcut, which
+        // refresh is not), and Cmd+R is webview reload in a dev build, which
+        // would throw away the app's whole state.
+        bind("panel.refresh", &["Ctrl+r"]),
         bind("panel.toggle_hidden", &["Ctrl+h"]),
         bind("panel.cycle_sort", &["Ctrl+s"]),
         bind("panel.view_1", &["Ctrl+1"]),

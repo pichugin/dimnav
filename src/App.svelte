@@ -49,6 +49,7 @@
       show_hidden: true,
       geometry: { columns: 0, rows_per_column: 0 },
       search: null,
+      notice: null,
     };
   }
 
@@ -1370,6 +1371,8 @@
         snapshot = await nav.navigate(active, { kind: "parent" });
       } else if (action === "search.start") {
         await searchStart(active);
+      } else if (action === "panel.refresh") {
+        snapshot = await nav.refresh(active);
       } else if (action === "panel.toggle_hidden") {
         await setHidden(active, !snapshot[active].show_hidden);
       } else if (action === "panel.cycle_sort") {
@@ -1453,6 +1456,18 @@
             prompt = null;
             status = o.summary;
             void refreshBoth();
+          }),
+        );
+
+        // A panel's directory changed underneath us and the core reconciled it
+        // (§5.6). The payload is one panel's whole state — cursor, selection and
+        // scroll already resolved on the core side — so this is a straight
+        // replace. Only the panel named in the event is touched, so a background
+        // refresh of one panel cannot disturb the other.
+        unlisten.push(
+          await events.panelChangedEvent.listen((e) => {
+            const { panel, state } = e.payload;
+            snapshot = { ...snapshot, [panel]: state };
           }),
         );
 
@@ -1615,6 +1630,21 @@
                 {label(entry)}
               </div>
             {/each}
+          </div>
+        {/if}
+
+        <!-- Something happened to this directory without the user asking (§5.6):
+             it was moved, deleted, replaced, or became unreadable. Non-modal by
+             design — a background process renaming a folder is not a failure, and
+             the red dialog is reserved for operations that failed. The sentence
+             comes from the core; this only decides where it sits. -->
+        {#if p.notice}
+          <div
+            class="panel-notice"
+            class:bad={p.notice.kind === "denied"}
+            title={p.notice.message}
+          >
+            {p.notice.message}
           </div>
         {/if}
 
@@ -2044,6 +2074,23 @@
   }
   .panel-foot {
     border-top: 1px solid var(--border);
+  }
+  /* Out-of-band directory notice (§5.6). Sits above the footer, inside the
+     panel it describes, and stays quiet: this reports something that already
+     happened, so it must not read like an operation failure. `denied` is the
+     one case the user can act on, so only that one is coloured. */
+  .panel-notice {
+    padding: 4px 8px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-alt);
+    color: var(--fg-dim);
+    font-size: 0.9em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .panel-notice.bad {
+    color: var(--term-err);
   }
   .path {
     flex: 1;

@@ -16,7 +16,7 @@ use specta::Type;
 // ---------------------------------------------------------------------------
 
 /// Which panel an intent targets. The two-panel model is the app's core (§5.1).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum PanelId {
     #[default]
@@ -25,7 +25,7 @@ pub enum PanelId {
 }
 
 /// What kind of filesystem object an entry is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryKind {
     File,
@@ -36,7 +36,7 @@ pub enum EntryKind {
 
 /// Readability marker, so a single unreadable entry renders as a marker rather
 /// than failing the whole listing (§5.6).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum EntryMarker {
     Ok,
@@ -129,6 +129,41 @@ pub struct QuickSearch {
     pub miss_rev: u32,
 }
 
+/// Why a panel is showing an out-of-band notice (§5.6). Drives styling only —
+/// the sentence itself comes from [`PanelNotice::message`], because composing it
+/// needs the old path / volume name and that is core knowledge, not the
+/// frontend's (same split as [`OpErrorInfo::reason`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum PanelNoticeKind {
+    /// The directory was renamed or moved and the panel followed it.
+    Moved,
+    /// Something else now occupies the path; the listing was reloaded fresh.
+    Replaced,
+    /// The directory was deleted; the panel fell back to an ancestor.
+    Deleted,
+    /// The directory was moved to the Trash; the panel fell back to an ancestor.
+    Trashed,
+    /// The volume went away; the panel fell back to home.
+    Unmounted,
+    /// The directory still exists but became unreadable. The panel deliberately
+    /// stays put — navigating away would hide the actual problem (§5.6).
+    Denied,
+}
+
+/// A one-line, non-modal explanation of something that happened to a panel's
+/// directory without the user asking (§5.6). Rendered in the panel footer, not as
+/// a dialog: a background process renaming a folder is not a failure, and the
+/// red-background dialog is reserved for operations that failed.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct PanelNotice {
+    pub kind: PanelNoticeKind,
+    /// Ready-to-render sentence, composed by the core.
+    pub message: String,
+    /// What the notice is about — the directory's previous path, or the volume.
+    pub path: String,
+}
+
 /// The full state of one panel — the unit the frontend renders.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct PanelState {
@@ -149,6 +184,9 @@ pub struct PanelState {
     /// The open quick-search box, or `None` when there is none (§5.9). Transient
     /// like `top_index`: never persisted, and any other input ends it.
     pub search: Option<QuickSearch>,
+    /// Set when the directory changed underneath the panel and the core had to
+    /// react (§5.6). Transient: cleared by the next deliberate navigation.
+    pub notice: Option<PanelNotice>,
 }
 
 impl Default for PanelState {
@@ -165,6 +203,7 @@ impl Default for PanelState {
             show_hidden: true,
             geometry: PanelGeometry::default(),
             search: None,
+            notice: None,
         }
     }
 }
@@ -765,6 +804,68 @@ impl Default for TerminalPrefs {
     }
 }
 
+/// Where a panel goes when its directory is gone for good and there is nothing to
+/// follow (§5.6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "kebab-case")]
+pub enum OnLost {
+    /// Walk up to the closest ancestor that still exists and is readable.
+    #[default]
+    NearestAncestor,
+    /// Go straight to the home directory.
+    Home,
+}
+
+/// Directory-watching preferences (§5.6 / §7).
+///
+/// Every value here is a rate or a policy the user may want to change, so none of
+/// it is hardcoded (CLAUDE.md: keybindings and theme values are config-driven —
+/// the same rule applies to anything tunable).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(default)]
+pub struct WatchPrefs {
+    /// Master switch. Off means the panels only refresh on Ctrl+R and after the
+    /// app's own operations, exactly as they did before watching existed.
+    pub enabled: bool,
+    /// Quiet period before a dirty directory is re-listed. Filesystem events
+    /// arrive in storms; this is what stops one re-list per event.
+    pub debounce_ms: u64,
+    /// Upper bound on how long `debounce_ms` may keep deferring. Without it a
+    /// sustained write (an archive extracting into the visible directory) would
+    /// never go quiet and the panel would show nothing until it finished.
+    pub max_delay_ms: u64,
+    /// How often to re-check that the panel's directory is still where it was.
+    /// Two syscalls per panel; this is what catches a renamed *ancestor*, which
+    /// produces no event in either watched directory.
+    pub identity_poll_ms: u64,
+    /// Follow a renamed or moved directory to its new path. Off falls back to
+    /// treating a move like a deletion.
+    pub follow_moves: bool,
+    /// Where to land when the directory is gone and cannot be followed.
+    pub on_lost: OnLost,
+    /// Poll interval for volumes FSEvents does not cover (SMB/NFS). `0` disables
+    /// watching there entirely, leaving Ctrl+R and the focus refresh.
+    pub poll_non_local_ms: u64,
+    /// Re-check both panels when the window regains focus. Cheap, and it covers
+    /// everything the watcher structurally cannot (dropped events, suspension).
+    pub refresh_on_focus: bool,
+}
+
+impl Default for WatchPrefs {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            debounce_ms: 200,
+            max_delay_ms: 1000,
+            identity_poll_ms: 2000,
+            follow_moves: true,
+            on_lost: OnLost::default(),
+            poll_non_local_ms: 5000,
+            refresh_on_focus: true,
+        }
+    }
+}
+
 /// Root config document (serialized to TOML). Ships with working defaults — the
 /// app is fully usable with zero configuration (§7).
 ///
@@ -789,6 +890,7 @@ pub struct Config {
     pub right_panel: PanelPrefs,
     pub viewer: ViewerPrefs,
     pub terminal: TerminalPrefs,
+    pub watch: WatchPrefs,
     /// File-type → external-application map (§5.5). Empty by default, so every
     /// file opens with the system default until the user edits the TOML.
     ///
@@ -807,6 +909,7 @@ impl Default for Config {
             right_panel: PanelPrefs::default(),
             viewer: ViewerPrefs::default(),
             terminal: TerminalPrefs::default(),
+            watch: WatchPrefs::default(),
             associations: Vec::new(),
         }
     }

@@ -147,6 +147,56 @@ so it could only colour by exit code. The consequences:
 
 ---
 
+### Live directory watching (§5.6)
+
+- [x] Both panels' open directories are **watched**, so changes made by Finder, a
+      terminal or a build tool appear without the user asking. The panel's own
+      directory and its parent are watched; two panels in the same place cost one
+      watch
+- [x] Events are **coalesced, never one re-listing per event**: a change marks the
+      panel dirty and it is re-read after a quiet period, with a hard upper bound
+      so a long extraction still streams updates instead of showing nothing until
+      it finishes. A `git checkout` firing thousands of events costs at most one
+      re-read per cap interval
+- [x] A re-read that produces an identical listing is **dropped before it becomes
+      IPC traffic**, so an event storm that changes nothing visible pushes nothing
+- [x] Cursor and selection follow **names**, and the **scroll position is
+      preserved** — a background change never moves what the user is looking at
+- [x] The cursor falls to the **nearest surviving neighbour** when the entry it
+      was on is deleted, rather than jumping to the top of the listing
+- [x] **The open directory itself changing** is handled by tracking the
+      directory's identity rather than its path, with a distinct response per
+      cause — follows a rename or move (including of any *ancestor*), stays put
+      when access is revoked, falls back to the nearest readable ancestor on a
+      real deletion, goes home on an eject, and never follows into the Trash. See
+      the table in SPEC §5.6
+- [x] Each of those attaches a short **non-modal notice** to the panel; the
+      red-background dialog stays reserved for operations that actually failed
+- [x] **Ctrl+R** refreshes on demand (SPEC §6), and regaining window focus
+      re-checks both panels — covering what a watcher structurally cannot see
+- [x] Network volumes fall back to **polling**, since FSEvents creates the stream
+      and then never delivers on SMB/NFS mounts
+- [x] All of it is config-driven under `[watch]`, including a master switch
+- [x] Destructive operations **re-check each path** against the filesystem before
+      acting, so an operation built from a listing that has not caught up fails
+      early and names the entry instead of failing obscurely later
+
+Known limits:
+
+- The identity/follow half is the only platform-specific part (`O_EVTONLY` +
+  `fcntl(F_GETPATH)` on macOS). `notify` itself is portable, so Phase 4 needs
+  roughly forty lines per OS behind the existing seam — with the caveat that
+  Windows must pass `FILE_SHARE_DELETE` or the handle would block deleting the
+  watched directory
+- A renamed *ancestor* is caught by the identity poll (a couple of syscalls on a
+  timer), not by an event, so it is noticed within that interval rather than
+  instantly — no event fires inside either watched directory when a grandparent
+  is renamed
+- FSEvents is inherently recursive, so a panel sitting on a huge tree receives and
+  discards subtree events. The cost per discarded event is a path comparison
+
+---
+
 ## Planned
 
 ### Terminal
@@ -237,7 +287,7 @@ these into checkboxes:
 - Multi-selection model (§5.3)
 - Copy / move with the editable destination prompt and FAR collision dialogs (§5.4a)
 - Delete with the persisted "Move to Trash" checkbox (§5.4a)
-- Create directory, rename, refresh, recursive folder-size calculation (§5.4)
+- Create directory, rename, recursive folder-size calculation (§5.4)
 - Sorting modes and the hidden-files toggle, persisted per panel (§5.8)
 - Open / F3 View / F4 Edit routing, external and embedded (§5.5)
 - Embedded viewer and editor: text/hex/image, search, goto, wrap, encodings,

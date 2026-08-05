@@ -429,6 +429,7 @@ export type Config = {
 	right_panel?: PanelPrefs,
 	viewer?: ViewerPrefs,
 	terminal?: TerminalPrefs,
+	watch?: WatchPrefs,
 	/**
 	 *  File-type → external-application map (§5.5). Empty by default, so every
 	 *  file opens with the system default until the user edits the TOML.
@@ -638,6 +639,16 @@ export type NavTarget =
 /**  Jump to an explicit path (absolute or relative). */
 { kind: "path"; value: string };
 
+/**
+ *  Where a panel goes when its directory is gone for good and there is nothing to
+ *  follow (§5.6).
+ */
+export type OnLost = 
+/**  Walk up to the closest ancestor that still exists and is readable. */
+"nearest-ancestor" | 
+/**  Go straight to the home directory. */
+"home";
+
 /**  A name collision needs a user decision (FAR dialog shapes). */
 export type OpCollisionEvent = CollisionPrompt;
 
@@ -732,6 +743,43 @@ export type PanelGeometry = {
 export type PanelId = "left" | "right";
 
 /**
+ *  A one-line, non-modal explanation of something that happened to a panel's
+ *  directory without the user asking (§5.6). Rendered in the panel footer, not as
+ *  a dialog: a background process renaming a folder is not a failure, and the
+ *  red-background dialog is reserved for operations that failed.
+ */
+export type PanelNotice = {
+	kind: PanelNoticeKind,
+	/**  Ready-to-render sentence, composed by the core. */
+	message: string,
+	/**  What the notice is about — the directory's previous path, or the volume. */
+	path: string,
+};
+
+/**
+ *  Why a panel is showing an out-of-band notice (§5.6). Drives styling only —
+ *  the sentence itself comes from [`PanelNotice::message`], because composing it
+ *  needs the old path / volume name and that is core knowledge, not the
+ *  frontend's (same split as [`OpErrorInfo::reason`]).
+ */
+export type PanelNoticeKind = 
+/**  The directory was renamed or moved and the panel followed it. */
+"moved" | 
+/**  Something else now occupies the path; the listing was reloaded fresh. */
+"replaced" | 
+/**  The directory was deleted; the panel fell back to an ancestor. */
+"deleted" | 
+/**  The directory was moved to the Trash; the panel fell back to an ancestor. */
+"trashed" | 
+/**  The volume went away; the panel fell back to home. */
+"unmounted" | 
+/**
+ *  The directory still exists but became unreadable. The panel deliberately
+ *  stays put — navigating away would hide the actual problem (§5.6).
+ */
+"denied";
+
+/**
  *  Persisted per-panel preferences, restored on the next launch (§5.8 / §7).
  * 
  *  Field order matters: TOML requires plain values before tables, and `view_mode`
@@ -769,6 +817,11 @@ export type PanelState = {
 	 *  like `top_index`: never persisted, and any other input ends it.
 	 */
 	search: QuickSearch | null,
+	/**
+	 *  Set when the directory changed underneath the panel and the core had to
+	 *  react (§5.6). Transient: cleared by the next deliberate navigation.
+	 */
+	notice: PanelNotice | null,
 };
 
 /**
@@ -1077,6 +1130,55 @@ export type ViewerPrefs = {
 	wrap?: boolean,
 	tab_width?: number,
 	hex_bytes_per_row?: number,
+};
+
+/**
+ *  Directory-watching preferences (§5.6 / §7).
+ * 
+ *  Every value here is a rate or a policy the user may want to change, so none of
+ *  it is hardcoded (CLAUDE.md: keybindings and theme values are config-driven —
+ *  the same rule applies to anything tunable).
+ */
+export type WatchPrefs = {
+	/**
+	 *  Master switch. Off means the panels only refresh on Ctrl+R and after the
+	 *  app's own operations, exactly as they did before watching existed.
+	 */
+	enabled?: boolean,
+	/**
+	 *  Quiet period before a dirty directory is re-listed. Filesystem events
+	 *  arrive in storms; this is what stops one re-list per event.
+	 */
+	debounce_ms?: number,
+	/**
+	 *  Upper bound on how long `debounce_ms` may keep deferring. Without it a
+	 *  sustained write (an archive extracting into the visible directory) would
+	 *  never go quiet and the panel would show nothing until it finished.
+	 */
+	max_delay_ms?: number,
+	/**
+	 *  How often to re-check that the panel's directory is still where it was.
+	 *  Two syscalls per panel; this is what catches a renamed *ancestor*, which
+	 *  produces no event in either watched directory.
+	 */
+	identity_poll_ms?: number,
+	/**
+	 *  Follow a renamed or moved directory to its new path. Off falls back to
+	 *  treating a move like a deletion.
+	 */
+	follow_moves?: boolean,
+	/**  Where to land when the directory is gone and cannot be followed. */
+	on_lost?: OnLost,
+	/**
+	 *  Poll interval for volumes FSEvents does not cover (SMB/NFS). `0` disables
+	 *  watching there entirely, leaving Ctrl+R and the focus refresh.
+	 */
+	poll_non_local_ms?: number,
+	/**
+	 *  Re-check both panels when the window regains focus. Cheap, and it covers
+	 *  everything the watcher structurally cannot (dropped events, suspension).
+	 */
+	refresh_on_focus?: boolean,
 };
 
 /* Tauri Specta runtime */

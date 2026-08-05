@@ -137,7 +137,11 @@ impl AppState {
 
     /// Clone a panel and surface any cached recursive folder sizes onto its dir
     /// entries. `..` and non-directories are left untouched.
-    fn panel_snapshot(&self, id: PanelId) -> PanelState {
+    ///
+    /// Public because the watcher pushes a *single* panel when a directory
+    /// changes underneath it (§5.6); [`snapshot`](Self::snapshot) would clone
+    /// both panels' entry vectors to deliver one panel's news.
+    pub fn panel_snapshot(&self, id: PanelId) -> PanelState {
         let mut panel = self.panel(id).clone();
         if self.size_cache.is_empty() || panel.path.is_empty() {
             return panel;

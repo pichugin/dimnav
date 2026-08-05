@@ -10,6 +10,8 @@
 //! Kept platform-agnostic: unix-only metadata sits behind `#[cfg(unix)]` with
 //! fallbacks so Phase 4 (Windows/Linux) only has to add arms.
 
+pub mod watch;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;

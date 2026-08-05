@@ -23,7 +23,7 @@
 
 use std::path::Path;
 
-use crate::types::{DirListing, Motion, PanelState};
+use crate::types::{DirListing, EntryKind, Motion, PanelState};
 
 pub mod search;
 
@@ -142,10 +142,14 @@ pub fn set_listing(state: &mut PanelState, listing: DirListing) {
 /// should use; [`set_listing`] (cursor to top, selection cleared) is for actually
 /// changing directory.
 pub fn set_listing_preserving(state: &mut PanelState, listing: DirListing) {
-    let focused = state
-        .entries
-        .get(state.cursor_index)
-        .map(|e| e.name.clone());
+    // The names in their old order, so a vanished cursor entry can fall back to
+    // its nearest surviving *neighbour*. Dropping to index 0 instead would throw
+    // the cursor to the top of the listing every time another app deletes the
+    // file it happened to be sitting on.
+    let old_names: Vec<String> = state.entries.iter().map(|e| e.name.clone()).collect();
+    let old_cursor = state
+        .cursor_index
+        .min(old_names.len().saturating_sub(1));
     let selected: Vec<String> = state
         .selection
         .iter()
@@ -156,9 +160,14 @@ pub fn set_listing_preserving(state: &mut PanelState, listing: DirListing) {
     // fired by a completed operation must not yank the box out from under someone
     // mid-word (§5.9). `set_listing` clears it for the change-directory case.
     let search = state.search.take();
+    let old_top = state.top_index;
 
     set_listing(state, listing);
     state.search = search;
+    // Restore the viewport *before* anything clamps. `set_listing` zeroes it, and
+    // re-deriving the window from zero pins the cursor to the last visible row —
+    // which a watcher-driven refresh would do on every background change.
+    state.top_index = old_top;
 
     state.selection = state
         .entries
@@ -167,9 +176,20 @@ pub fn set_listing_preserving(state: &mut PanelState, listing: DirListing) {
         .filter(|(_, e)| is_selectable(e) && selected.contains(&e.name))
         .map(|(i, _)| i)
         .collect();
-    if let Some(name) = focused {
-        position_on(state, &name);
-    }
+
+    // Walk outward from where the cursor was — the entry itself first, then the
+    // ones after it, then the ones before — and stop at the first name that
+    // survived the re-read.
+    let target = if old_names.is_empty() {
+        0
+    } else {
+        old_names[old_cursor..]
+            .iter()
+            .chain(old_names[..old_cursor].iter().rev())
+            .find_map(|name| state.entries.iter().position(|e| &e.name == name))
+            .unwrap_or(old_cursor)
+    };
+    set_cursor(state, target);
 }
 
 /// Re-apply the panel's current sort mode to the entries already loaded, keeping
@@ -202,6 +222,44 @@ pub fn position_on(state: &mut PanelState, name: &str) {
         state.cursor_index = i;
         clamp_scroll(state);
     }
+}
+
+/// Move the cursor onto `name`, or — when it is gone — onto the slot where it
+/// used to sort.
+///
+/// This is the landing after a panel's own directory was deleted (§5.6):
+/// [`position_on`] cannot serve that case, because the name it is looking for is
+/// precisely the one that no longer exists, and it silently does nothing. Putting
+/// the cursor where the folder *was* keeps the user oriented instead of dumping
+/// them at the top of the parent listing.
+///
+/// The vanished entry was always a directory (it was a panel's own path), and
+/// every sort mode groups folders first, so the search stays among the folders.
+/// Name comparison is lower-cased to match [`crate::fs::sort_entries`]. Exact for
+/// the name-ordered modes; for `Date` the folders are not name-ordered, so the
+/// result is a reasonable approximation rather than the true slot.
+pub fn position_on_nearest_sorted(state: &mut PanelState, name: &str) {
+    if let Some(i) = state.entries.iter().position(|e| e.name == name) {
+        set_cursor(state, i);
+        return;
+    }
+
+    let key = name.to_lowercase();
+    let target = {
+        let dirs = || {
+            state
+                .entries
+                .iter()
+                .enumerate()
+                .filter(|(_, e)| e.name != ".." && e.kind == EntryKind::Dir)
+        };
+        dirs()
+            .find(|(_, e)| e.name.to_lowercase() > key)
+            .map(|(i, _)| i)
+            .or_else(|| dirs().next_back().map(|(i, _)| i))
+            .unwrap_or(0)
+    };
+    set_cursor(state, target);
 }
 
 /// The parent directory of `path`, or `None` at a filesystem root.
@@ -662,11 +720,132 @@ mod tests {
             },
         );
 
-        // Only the survivor stays selected; the cursor falls back to the top since
-        // the entry it was on no longer exists.
+        // Only the survivor stays selected. The cursor was on c.txt; walking
+        // outward from there finds a.txt as the nearest surviving name, which is
+        // also index 0 here.
         assert_eq!(p.selection, vec![0]);
         assert_eq!(p.entries[p.selection[0]].name, "a.txt");
         assert_eq!(p.cursor_index, 0);
+    }
+
+    #[test]
+    fn preserving_relist_moves_the_cursor_to_the_nearest_survivor_not_the_top() {
+        let mut p = named_panel(&["a.txt", "b.txt", "c.txt", "d.txt"]);
+        p.cursor_index = 1; // b.txt
+
+        // b.txt is deleted from under us by another app.
+        set_listing_preserving(
+            &mut p,
+            DirListing {
+                path: "/dir".to_string(),
+                entries: vec![
+                    ent("a.txt", EntryKind::File),
+                    ent("c.txt", EntryKind::File),
+                    ent("d.txt", EntryKind::File),
+                ],
+            },
+        );
+
+        // The entry that took its place, not the top of the listing.
+        assert_eq!(p.entries[p.cursor_index].name, "c.txt");
+    }
+
+    #[test]
+    fn preserving_relist_walks_backwards_when_nothing_after_the_cursor_survives() {
+        let mut p = named_panel(&["a.txt", "b.txt", "c.txt", "d.txt"]);
+        p.cursor_index = 2; // c.txt
+
+        // Everything from the cursor down is gone.
+        set_listing_preserving(
+            &mut p,
+            DirListing {
+                path: "/dir".to_string(),
+                entries: vec![
+                    ent("a.txt", EntryKind::File),
+                    ent("b.txt", EntryKind::File),
+                ],
+            },
+        );
+
+        assert_eq!(p.entries[p.cursor_index].name, "b.txt");
+    }
+
+    #[test]
+    fn preserving_relist_keeps_the_viewport_still() {
+        // A long listing scrolled well past the first page. A background change
+        // must not move the window: re-deriving it from a zeroed top_index pins
+        // the cursor to the last visible row, which with a live watcher would
+        // yank the panel on every unrelated file event.
+        let mut p = panel(100, 2, 10); // page = 20
+        p.cursor_index = 60;
+        clamp_scroll(&mut p);
+        let top_before = p.top_index;
+        let focused_before = p.entries[p.cursor_index].name.clone();
+        assert!(top_before > 0, "precondition: scrolled off the first page");
+
+        let same = DirListing {
+            path: p.path.clone(),
+            entries: p.entries.clone(),
+        };
+        set_listing_preserving(&mut p, same);
+
+        assert_eq!(p.top_index, top_before, "viewport moved on a no-op refresh");
+        // Tracked by name, not index: `set_listing` re-applies the sort, so the
+        // same entry can legitimately sit at a different index afterwards.
+        assert_eq!(p.entries[p.cursor_index].name, focused_before);
+    }
+
+    #[test]
+    fn nearest_sorted_lands_where_the_deleted_folder_used_to_be() {
+        // The parent listing after ~/Projects/foo was deleted: the cursor should
+        // land between "bar" and "quux", where "foo" used to sort.
+        let mut p = PanelState {
+            path: "/Projects".to_string(),
+            entries: vec![
+                ent("..", EntryKind::Dir),
+                ent("bar", EntryKind::Dir),
+                ent("quux", EntryKind::Dir),
+                ent("readme.txt", EntryKind::File),
+            ],
+            ..Default::default()
+        };
+
+        position_on_nearest_sorted(&mut p, "foo");
+        assert_eq!(p.entries[p.cursor_index].name, "quux");
+    }
+
+    #[test]
+    fn nearest_sorted_prefers_the_name_when_it_is_still_there() {
+        let mut p = PanelState {
+            path: "/Projects".to_string(),
+            entries: vec![
+                ent("..", EntryKind::Dir),
+                ent("bar", EntryKind::Dir),
+                ent("foo", EntryKind::Dir),
+            ],
+            ..Default::default()
+        };
+
+        position_on_nearest_sorted(&mut p, "foo");
+        assert_eq!(p.entries[p.cursor_index].name, "foo");
+    }
+
+    #[test]
+    fn nearest_sorted_falls_to_the_last_folder_when_the_name_sorts_past_them_all() {
+        let mut p = PanelState {
+            path: "/Projects".to_string(),
+            entries: vec![
+                ent("..", EntryKind::Dir),
+                ent("alpha", EntryKind::Dir),
+                ent("beta", EntryKind::Dir),
+                ent("readme.txt", EntryKind::File),
+            ],
+            ..Default::default()
+        };
+
+        // "zeta" sorts after every folder, and must not land on the file.
+        position_on_nearest_sorted(&mut p, "zeta");
+        assert_eq!(p.entries[p.cursor_index].name, "beta");
     }
 
     #[test]

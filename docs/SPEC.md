@@ -152,7 +152,23 @@ Reference behavior: **model these on FarManager first; where FarManager guidance
 - **Access denied** (macOS TCC-protected folders, permission bits, locked files): show a clear, non-fatal **red-background** message; never crash or hang. Where the fix is elevation, offer to escalate via the **OS-native authorization prompt** (macOS Authorization Services) — the app never collects the password itself — with Skip / Cancel available. Where the fix is a TCC grant (Desktop/Documents/Downloads/external volumes), trigger the OS permission prompt.
 - **Unreadable / broken entries** (dangling symlinks, special files, devices): render with a distinct marker rather than failing the whole listing.
 - **Directory changed underneath us** (files added/removed by another process): refresh gracefully; keep cursor on a sensible entry.
+  - Both panels' directories are **watched**, so outside changes appear without the user asking. Events are coalesced, never mapped one-to-one to re-listings: a change marks the panel dirty, and it is re-read after a short quiet period or a hard upper bound, whichever comes first (so a long extraction still streams updates). A re-read whose result is identical is dropped rather than pushed.
+  - The cursor and the selection follow **names**, not indices, and the scroll position is preserved — a background change must never move what the user is looking at.
+  - `Ctrl+R` refreshes on demand, and regaining window focus re-checks both panels. These cover what watching structurally cannot: network volumes (FSEvents does not report on them; they fall back to polling), dropped events, and time spent suspended.
+- **The open directory itself changes.** A directory has an identity independent of its path, so the panel tracks the directory rather than the string. What the panel does depends on which of these happened:
+
+  | What happened | What the panel does |
+  |---|---|
+  | Renamed or moved (including any **ancestor** being renamed) | **Follows it.** Path updates; cursor, selection and scroll survive. The folder still exists with the same contents, so from the user's point of view nothing happened — climbing to the parent would discard their place in response to a non-event. |
+  | Moved to the Trash | Treated as a deletion. Deliberately **not** followed: trashing means "get rid of it", not "browse it in the Trash". |
+  | Deleted | Falls back to the nearest existing **readable** ancestor, with the cursor placed where the deleted folder used to sort. |
+  | Replaced (a different directory now at the same path) | Stays at the path and reloads from scratch — cursor to top, selection dropped. |
+  | Volume ejected | Goes home. Landing in `/Volumes` would be useless. |
+  | Became unreadable (TCC / permissions) | **Stays put** and says so, offering a retry. Navigating away would hide the actual problem. |
+
+  Each of these attaches a short, **non-modal** notice to the panel. This is not the red failure dialog: a background process renaming a folder is not an operation failure.
 - Every file operation returns a structured result the frontend can render (success / partial / failed-with-reason), rather than throwing opaque errors.
+- **Operating on a stale listing:** before a destructive operation runs, each resolved path is re-checked against the filesystem and the operation is refused with a clear message if the listing no longer describes it. This is not a fix for the general time-of-check/time-of-use race, which no check of this shape can close; it catches the case that actually occurs.
 
 ### 5.7 Terminal integration with navigation (Phase 2 behaviors, specified now)
 - **Enter on an executable** runs it; stdout/stderr stream into the terminal.

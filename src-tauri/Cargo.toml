@@ -50,6 +50,12 @@ serde_json = "1"
 # Finder-restorable — the app never reimplements trashing itself (§5.4a).
 trash = "5"
 
+# Filesystem watching for the panels' live refresh (§5.6). Lives in the adapter,
+# not `fm-core`: the core owns what a change *means* (`fs::watch`), this owns the
+# platform machinery. Portable by construction — FSEvents on macOS, inotify on
+# Linux, ReadDirectoryChangesW on Windows — so Phase 4 inherits it for free.
+notify = "8"
+
 # Typed IPC contract stack: DTOs are exported to TypeScript from the Rust
 # definitions so the frontend never hand-writes command/event signatures.
 specta = { workspace = true }

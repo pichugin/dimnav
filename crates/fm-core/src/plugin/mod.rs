@@ -9,7 +9,9 @@
 //! Keeping these as a stable, documented internal contract now is what lets
 //! third-party plugins later avoid breaking on every release.
 
-use crate::types::Entry;
+use std::path::Path;
+
+use crate::types::{Entry, PanelId};
 
 /// A bindable command that can appear in a command palette (§6a).
 pub trait Command {
@@ -63,6 +65,32 @@ pub trait Operation {
 /// Contributes a theme (colors, fonts, transparency) (§6a / §7).
 pub trait ThemeProvider {
     fn id(&self) -> &str;
+}
+
+/// Watches the directories the panels have open and reports when one changes
+/// underneath the app (§5.6 / §6a).
+///
+/// The live-refresh feature is written against this rather than calling a
+/// watcher crate directly, so the change *source* is replaceable: an
+/// archive-as-virtual-directory provider or a remote filesystem can implement it
+/// without the panels learning anything new. It is also the seam that keeps the
+/// platform-specific half (FSEvents / inotify / ReadDirectoryChangesW) out of the
+/// core, which owns only the decision of what a change *means*
+/// ([`crate::fs::watch`]).
+pub trait FsObserver {
+    /// Begin observing `path` on behalf of `panel`, replacing whatever that panel
+    /// was previously pointed at. Called on every directory change, so it must be
+    /// cheap and must not fail loudly — watching is a convenience, and a panel
+    /// that cannot be watched simply falls back to manual refresh.
+    fn observe(&self, panel: PanelId, path: &Path);
+
+    /// Stop observing on `panel`'s behalf.
+    fn release(&self, panel: PanelId);
+
+    /// Check every observed directory right now, without waiting for the next
+    /// event or poll. Backs the window-focus refresh, which is what covers the
+    /// cases a watcher structurally cannot see.
+    fn poke(&self);
 }
 
 /// **Phase-2 seam.** Where an executable's stdout/stderr is routed when the user

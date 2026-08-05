@@ -8,7 +8,9 @@ mod commands;
 mod events;
 mod ops_runtime;
 mod terminal_runtime;
+mod watch_runtime;
 
+use tauri::Manager;
 use tauri_specta::{collect_commands, collect_events, Builder};
 
 /// Construct the `tauri-specta` builder with the registered command and event
@@ -134,9 +136,30 @@ pub fn run() {
         // `fm-core` types; the adapter owns nothing but the lock (§5.5).
         .manage(commands::ViewState::default())
         .manage(commands::EditState::default())
+        // Watches the directories both panels have open so outside changes show
+        // up without the user asking (§5.6).
+        .manage(watch_runtime::WatchRuntime::default())
         .invoke_handler(builder.invoke_handler())
+        // Regaining focus re-checks both panels. Cheap, and it is what covers
+        // everything a watcher structurally cannot see: volumes FSEvents does not
+        // report on, dropped events, and time spent suspended (§5.6).
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Focused(true) = event {
+                use fm_core::plugin::FsObserver;
+                let refresh_on_focus = window
+                    .state::<commands::SharedState>()
+                    .lock()
+                    .map(|s| s.config.watch.enabled && s.config.watch.refresh_on_focus)
+                    .unwrap_or(false);
+                if refresh_on_focus {
+                    window.state::<watch_runtime::WatchRuntime>().poke();
+                }
+            }
+        })
         .setup(move |app| {
             builder.mount_events(app);
+            app.state::<watch_runtime::WatchRuntime>()
+                .start(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())

@@ -27,6 +27,8 @@ use tauri_specta::Event;
 use crate::events::OpCompleteEvent;
 use crate::ops_runtime::{registry, OpRegistry, TauriObserver, UserInput};
 use crate::terminal_runtime::{self, TerminalRuntime};
+use crate::watch_runtime::WatchRuntime;
+use fm_core::plugin::FsObserver;
 
 /// Tauri-managed shared navigation state.
 pub type SharedState = Mutex<AppState>;
@@ -44,8 +46,9 @@ fn lock_err<T>(_: PoisonError<T>) -> String {
     "navigation state lock was poisoned".to_string()
 }
 
-/// Default starting directory for a fresh session.
-fn home_dir() -> String {
+/// Default starting directory for a fresh session, and the landing spot when a
+/// panel's directory goes away for good (§5.6).
+pub(crate) fn home_dir() -> String {
     std::env::var("HOME").unwrap_or_else(|_| "/".to_string())
 }
 
@@ -56,6 +59,43 @@ fn start_dir(prefs: &fm_core::types::PanelPrefs) -> String {
         Some(d) if Path::new(d).is_dir() => d.to_string(),
         _ => home_dir(),
     }
+}
+
+/// Check that entries resolved from a panel's in-memory listing still describe
+/// what is on disk, before a destructive operation acts on them.
+///
+/// A panel's listing can lag the filesystem. That gap is much smaller now that
+/// directories are watched, but it is never zero — and an operation built from a
+/// stale name would otherwise fail somewhere deep inside the pipeline with a
+/// message that does not say which entry was wrong.
+///
+/// This is deliberately *not* a fix for the general time-of-check/time-of-use
+/// race, which no check of this shape can close: a path can always be swapped
+/// between here and the operation. It catches the case that actually occurs — a
+/// listing that has not caught up yet — and fails early and legibly.
+fn verify_current(targets: &[(String, EntryKind)]) -> Result<(), String> {
+    for (path, kind) in targets {
+        let Ok(meta) = std::fs::symlink_metadata(path) else {
+            return Err(format!(
+                "{path} is no longer there — the listing was out of date. Refresh and try again."
+            ));
+        };
+        let actual = if meta.file_type().is_symlink() {
+            EntryKind::Symlink
+        } else if meta.is_dir() {
+            EntryKind::Dir
+        } else if meta.is_file() {
+            EntryKind::File
+        } else {
+            EntryKind::Special
+        };
+        if actual != *kind {
+            return Err(format!(
+                "{path} is no longer a {kind:?} — the listing was out of date. Refresh and try again."
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Persist the current preferences off the caller's thread. Panel state is folded
@@ -228,7 +268,10 @@ pub fn list_dir(path: String, show_hidden: bool, sort: SortMode) -> DirListing {
 /// falling back to home when a remembered directory is gone. Call once on boot.
 #[tauri::command]
 #[specta::specta]
-pub async fn init(state: State<'_, SharedState>) -> Result<AppSnapshot, String> {
+pub async fn init(
+    state: State<'_, SharedState>,
+    watch: State<'_, WatchRuntime>,
+) -> Result<AppSnapshot, String> {
     let config = tauri::async_runtime::spawn_blocking(fm_core::config::load)
         .await
         .map_err(|e| e.to_string())?;
@@ -262,7 +305,14 @@ pub async fn init(state: State<'_, SharedState>) -> Result<AppSnapshot, String> 
     let mut s = state.lock().map_err(lock_err)?;
     fm_core::nav::set_listing(&mut s.left, left);
     fm_core::nav::set_listing(&mut s.right, right);
-    Ok(s.snapshot())
+    let snapshot = s.snapshot();
+    drop(s);
+
+    // Start watching both panels' directories so outside changes show up without
+    // the user asking (§5.6).
+    watch.observe(PanelId::Left, Path::new(&snapshot.left.path));
+    watch.observe(PanelId::Right, Path::new(&snapshot.right.path));
+    Ok(snapshot)
 }
 
 // --- Per-panel view state (§5.8) --------------------------------------------
@@ -494,6 +544,7 @@ pub fn deselect_all(state: State<'_, SharedState>, panel: PanelId) -> Result<App
 #[specta::specta]
 pub async fn navigate(
     state: State<'_, SharedState>,
+    watch: State<'_, WatchRuntime>,
     panel: PanelId,
     target: NavTarget,
 ) -> Result<AppSnapshot, String> {
@@ -556,9 +607,17 @@ pub async fn navigate(
     if let Some(name) = exited_child {
         fm_core::nav::position_on(p, &name);
     }
+    // A deliberate move clears any notice the watcher left behind (§5.6).
+    s.panel_mut(panel).notice = None;
     // Remember the new directory so the next launch reopens here (§7).
     persist(&mut s);
-    Ok(s.snapshot_after_input())
+    let snapshot = s.snapshot_after_input();
+    let now = PathBuf::from(&s.panel(panel).path);
+    drop(s);
+
+    // Point the watcher at wherever this panel just landed.
+    watch.observe(panel, &now);
+    Ok(snapshot)
 }
 
 /// Re-read a panel's current directory, keeping the cursor on the same entry name
@@ -748,24 +807,31 @@ pub fn start_transfer(
             v
         };
 
-        let sources: Vec<String> = indices
+        let targets: Vec<(String, EntryKind)> = indices
             .into_iter()
             .filter_map(|i| p.entries.get(i))
             .filter(|e| e.name != "..")
-            .map(|e| base.join(&e.name).to_string_lossy().into_owned())
+            .map(|e| (base.join(&e.name).to_string_lossy().into_owned(), e.kind))
             .collect();
 
         let dest_path = fm_core::ops::resolve_dest(&base, &dest);
-        OpRequest {
-            kind,
-            sources,
-            dest: dest_path.to_string_lossy().into_owned(),
-        }
+        (
+            targets,
+            OpRequest {
+                kind,
+                sources: Vec::new(),
+                dest: dest_path.to_string_lossy().into_owned(),
+            },
+        )
     };
+    let (targets, mut req) = req;
 
-    if req.sources.is_empty() {
+    if targets.is_empty() {
         return Err("nothing to transfer".to_string());
     }
+    // Fail early and legibly if the listing these came from is out of date.
+    verify_current(&targets)?;
+    req.sources = targets.into_iter().map(|(p, _)| p).collect();
 
     // A copy/move destination is always a folder to place sources into. Renaming in
     // place is a separate, explicit action (Shift+F6), so a single-source transfer
@@ -852,22 +918,30 @@ pub fn start_delete(
             v
         };
 
-        let paths: Vec<String> = indices
+        let targets: Vec<(String, EntryKind)> = indices
             .into_iter()
             .filter_map(|i| p.entries.get(i))
             .filter(|e| e.name != "..")
-            .map(|e| base.join(&e.name).to_string_lossy().into_owned())
+            .map(|e| (base.join(&e.name).to_string_lossy().into_owned(), e.kind))
             .collect();
 
-        DeleteRequest {
-            paths,
-            to_trash: s.trash_default(),
-        }
+        (
+            targets,
+            DeleteRequest {
+                paths: Vec::new(),
+                to_trash: s.trash_default(),
+            },
+        )
     };
+    let (targets, mut req) = req;
 
-    if req.paths.is_empty() {
+    if targets.is_empty() {
         return Err("nothing to delete".to_string());
     }
+    // Deleting is irreversible without the Trash, so refuse outright rather than
+    // acting on a name the listing no longer describes.
+    verify_current(&targets)?;
+    req.paths = targets.into_iter().map(|(p, _)| p).collect();
 
     // Deleting changes each parent's total, so drop cached folder sizes for the
     // targets and their ancestors (§ caching).
@@ -1289,6 +1363,7 @@ pub async fn terminal_run(
     app: AppHandle,
     state: State<'_, SharedState>,
     runtime: State<'_, TerminalRuntime>,
+    watch: State<'_, WatchRuntime>,
 ) -> Result<AppSnapshot, String> {
     let (plan, shell, history) = {
         let mut s = state.lock().map_err(lock_err)?;
@@ -1319,7 +1394,7 @@ pub async fn terminal_run(
             // `cd` moves the active panel, which is what keeps the prompt in the
             // folder the user is looking at (§5.7).
             let panel = state.lock().map_err(lock_err)?.active;
-            return navigate(state, panel, NavTarget::Path(path)).await;
+            return navigate(state, watch, panel, NavTarget::Path(path)).await;
         }
         fm_core::terminal::RunPlan::Spawn { command, cwd } => {
             if let Err(reason) = terminal_runtime::spawn(app.clone(), &runtime, shell, command, cwd)

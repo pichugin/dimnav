@@ -89,6 +89,7 @@ const OPEN: &[ActionInfo] = &[
 ];
 
 const PANEL_VIEW: &[ActionInfo] = &[
+    a("panel.refresh", "Refresh listing", "Re-reads the directory, keeping the cursor and selection. Directories are watched and refresh themselves, so this is for volumes that cannot be watched (§5.6)."),
     a("panel.toggle_hidden", "Toggle hidden files", "Per panel, persisted across restarts (§5.8)."),
     a("panel.cycle_sort", "Cycle sort mode", "Folders-first-by-name, type+name, size, date."),
     a("panel.view_1", "One-column view", ""),

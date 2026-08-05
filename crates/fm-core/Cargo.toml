@@ -19,8 +19,14 @@ dirs = "5"
 
 # Resolve numeric uid/gid to owner/group names for the file-info status bar.
 # Unix-only (macOS/Linux); gated so the non-unix build never sees it.
+#
+# `libc` backs `fs::watch`: a panel holds an O_EVTONLY descriptor on its open
+# directory so the core can tell "renamed" from "deleted" (fstat + F_GETPATH).
+# O_EVTONLY specifically is what keeps that descriptor from pinning the volume —
+# measured: a plain O_RDONLY handle makes ejecting fail with "Resource busy".
 [target.'cfg(unix)'.dependencies]
 uzers = "0.12"
+libc = "0.2"
 
 # NOTE: `tauri` is intentionally absent here and must stay that way. `cargo tree
 # -p fm-core` showing no tauri is the structural proof of the swappable-frontend
