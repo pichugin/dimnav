@@ -15,6 +15,23 @@ Section references are to `docs/SPEC.md`.
 
 ## Implemented
 
+### Panel navigation (§5.1)
+
+The rest of two-panel navigation is still under
+[Backfill needed](#backfill-needed); only what has shipped since is itemised here.
+
+- [x] **Ctrl+=** shows the **active panel's folder on the other panel**, leaving
+      the keyboard where it is — a push, not a Tab. The passive panel lands on
+      `..` and keeps its own sort, view and hidden-file settings, since only the
+      directory is mirrored
+- [x] Pressing it again is a no-op rather than a re-read, so a second press
+      cannot knock the other panel's cursor back to the top
+- [x] It does nothing at all while the terminal prompt, the viewer, the editor or
+      a dialog owns the keyboard — the binding lives only in the `panels`
+      keyboard context, so no surface has to opt out of it by hand (§6)
+- [x] The mirrored panel's new directory persists like any other move, so it
+      reopens there on the next launch (§7)
+
 ### Quick search (§5.9)
 
 - [x] **Cmd+F** opens a search box in the **top-right corner of the active

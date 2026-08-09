@@ -40,6 +40,7 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::select_all,
             commands::deselect_all,
             commands::navigate,
+            commands::equalize_panels,
             commands::refresh,
             // Quick search (§5.9).
             commands::search_start,

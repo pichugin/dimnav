@@ -202,6 +202,7 @@ All shortcuts must be **fully configurable**, with a sensible, documented defaul
 |---|---|
 | Help (About + the live shortcut list) | F1 |
 | Switch active panel | Tab |
+| Show the active panel's folder on the other panel (focus stays put) | Ctrl+= |
 | Move cursor up/down | ↑ / ↓ |
 | Jump between columns | ← / → |
 | Page up/down | PgUp / PgDn |

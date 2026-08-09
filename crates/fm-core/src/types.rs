@@ -24,6 +24,17 @@ pub enum PanelId {
     Right,
 }
 
+impl PanelId {
+    /// The other side. With exactly two panels this is a total function, not a
+    /// lookup that can fail.
+    pub fn other(self) -> Self {
+        match self {
+            PanelId::Left => PanelId::Right,
+            PanelId::Right => PanelId::Left,
+        }
+    }
+}
+
 /// What kind of filesystem object an entry is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "lowercase")]
@@ -1037,4 +1048,18 @@ pub struct ShortcutItem {
     pub keys: Vec<String>,
     pub title: String,
     pub description: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `other` is an involution — which is what lets callers use it as "the
+    /// passive panel" without also tracking which one they started from.
+    #[test]
+    fn the_other_panel_is_the_opposite_one() {
+        assert_eq!(PanelId::Left.other(), PanelId::Right);
+        assert_eq!(PanelId::Right.other(), PanelId::Left);
+        assert_eq!(PanelId::Left.other().other(), PanelId::Left);
+    }
 }

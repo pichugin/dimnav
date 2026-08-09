@@ -63,6 +63,7 @@ const NAVIGATION: &[ActionInfo] = &[
     a("panel.switch", "Switch panel", "Moves the keyboard between the left and right panel."),
     a("nav.enter", "Open entry", "Enters a folder, or opens a file with its configured handler. On `..` it goes to the parent and puts the cursor on the folder just left."),
     a("nav.parent", "Go to parent folder", "Same as Enter on `..` — the cursor lands on the folder just left."),
+    a("panel.equalize", "Show this folder on the other panel", "Opens the active panel's folder on the opposite panel too. The keyboard stays where it is."),
 ];
 
 const SELECTION: &[ActionInfo] = &[

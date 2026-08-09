@@ -1365,6 +1365,8 @@
         snapshot = await nav.deselectAll(active);
       } else if (action === "panel.switch") {
         snapshot = await nav.setActivePanel(active === "left" ? "right" : "left");
+      } else if (action === "panel.equalize") {
+        snapshot = await nav.equalizePanels();
       } else if (action === "nav.enter") {
         await activateFocused(active);
       } else if (action === "nav.parent") {

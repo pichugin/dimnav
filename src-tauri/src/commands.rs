@@ -620,6 +620,38 @@ pub async fn navigate(
     Ok(snapshot)
 }
 
+/// Show the active panel's folder on the other panel too (Ctrl+=).
+///
+/// A push, not a Tab: only the passive panel moves, so the keyboard stays where
+/// the user left it. Delegating to [`navigate`] rather than listing here is what
+/// keeps the watcher re-armed, the new directory persisted, and the cursor rules
+/// identical to every other directory change — the same reason `terminal_run`'s
+/// `cd` arm delegates.
+#[tauri::command]
+#[specta::specta]
+pub async fn equalize_panels(
+    state: State<'_, SharedState>,
+    watch: State<'_, WatchRuntime>,
+) -> Result<AppSnapshot, String> {
+    let (other, path, already_there) = {
+        let s = state.lock().map_err(lock_err)?;
+        let other = s.active.other();
+        let path = s.panel(s.active).path.clone();
+        let already_there = path == s.panel(other).path;
+        (other, path, already_there)
+    };
+
+    // Nothing to mirror: an empty path means the panel has not been populated
+    // yet, and a panel already showing the folder must not have its cursor
+    // knocked back to `..` by a second press.
+    if path.is_empty() || already_there {
+        let mut s = state.lock().map_err(lock_err)?;
+        return Ok(s.snapshot_after_input());
+    }
+
+    navigate(state, watch, other, NavTarget::Path(path)).await
+}
+
 /// Re-read a panel's current directory, keeping the cursor on the same entry name
 /// when it still exists (graceful refresh, SPEC §5.6).
 #[tauri::command]

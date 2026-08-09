@@ -119,6 +119,16 @@ export const commands = {
 	 */
 	navigate: (panel: PanelId, target: NavTarget) => typedError<AppSnapshot, string>(__TAURI_INVOKE("navigate", { panel, target })),
 	/**
+	 *  Show the active panel's folder on the other panel too (Ctrl+=).
+	 * 
+	 *  A push, not a Tab: only the passive panel moves, so the keyboard stays where
+	 *  the user left it. Delegating to [`navigate`] rather than listing here is what
+	 *  keeps the watcher re-armed, the new directory persisted, and the cursor rules
+	 *  identical to every other directory change — the same reason `terminal_run`'s
+	 *  `cd` arm delegates.
+	 */
+	equalizePanels: () => typedError<AppSnapshot, string>(__TAURI_INVOKE("equalize_panels")),
+	/**
 	 *  Re-read a panel's current directory, keeping the cursor on the same entry name
 	 *  when it still exists (graceful refresh, SPEC §5.6).
 	 */

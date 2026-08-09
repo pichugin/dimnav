@@ -162,6 +162,11 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         bind("panel.switch", &["Tab"]),
         bind("nav.enter", &["Enter"]),
         bind("nav.parent", &["Backspace"]),
+        // Push the active panel's folder onto the passive one. Ctrl-based for the
+        // same reason as the view state below, and `=` reads as "make them
+        // equal". A printable key carries no `Shift` part, and `=` is already the
+        // unshifted character on the key, so the chord is plain `Ctrl+=`.
+        bind("panel.equalize", &["Ctrl+="]),
         // Selection (§5.3).
         bind("selection.toggle", &[" "]),
         bind("selection.all", &["*"]),

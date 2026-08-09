@@ -115,6 +115,8 @@ export const nav = {
     unwrap(commands.setShowHidden(panel, value)),
   navigate: (panel: PanelId, target: NavTarget) =>
     unwrap(commands.navigate(panel, target)),
+  /** Ctrl+= — push the active panel's folder onto the other panel (§5.1). */
+  equalizePanels: () => unwrap(commands.equalizePanels()),
   refresh: (panel: PanelId) => unwrap(commands.refresh(panel)),
   // Quick search (§5.9). The core owns the query and decides whether a typed
   // character is accepted or rejected — `search.miss_rev` on the returned panel

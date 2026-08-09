@@ -6,6 +6,12 @@ All notable changes to dimnav are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Ctrl+=** shows the active panel's folder on the other panel, without moving
+  the keyboard off the panel you pressed it from. It is inert while the terminal,
+  viewer, editor or a dialog has focus.
+
 ## [0.1.0] - 2026-08-01
 
 First public release.
