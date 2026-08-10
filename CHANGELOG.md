@@ -12,6 +12,14 @@ All notable changes to dimnav are recorded here. The format follows
   the keyboard off the panel you pressed it from. It is inert while the terminal,
   viewer, editor or a dialog has focus.
 
+### Fixed
+
+- Closing the Esc terminal curtain now hands the keyboard back to wherever it was
+  before the curtain went up. Pressing Esc twice from a panel used to bring the
+  panels back while the command line silently kept the keys, so arrows and Enter
+  went to the prompt until you pressed Cmd+T. Leaving the curtain with Cmd+Shift+T
+  behaves the same way; starting from the prompt still leaves you at the prompt.
+
 ## [0.1.0] - 2026-08-01
 
 First public release.

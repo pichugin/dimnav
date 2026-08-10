@@ -74,6 +74,10 @@ pub struct Terminal {
     size: TerminalSize,
     /// The size Esc returns to when the curtain is drawn back.
     restore_size: TerminalSize,
+    /// Who owned the keyboard before the curtain took it, so drawing the curtain
+    /// back hands it to the same place — the panel it was on, or the prompt if
+    /// that is where the user already was.
+    restore_focused: bool,
     focused: bool,
     running: Option<RunningCommand>,
     /// Buffer deltas produced since the adapter last drained them.
@@ -106,6 +110,7 @@ impl Terminal {
                 other => other,
             },
             restore_size: TerminalSize::Collapsed,
+            restore_focused: false,
             focused: false,
             running: None,
             pending_chunks: Vec::new(),
@@ -311,11 +316,19 @@ impl Terminal {
     /// the window. From the Esc curtain it collapses back, since a second size
     /// key should always make the panels visible again.
     pub fn toggle_half(&mut self) {
+        let leaving_curtain = self.size == TerminalSize::Full;
         self.size = match self.size {
             TerminalSize::Half | TerminalSize::Full => TerminalSize::Collapsed,
             TerminalSize::Collapsed => TerminalSize::Half,
         };
         self.restore_size = TerminalSize::Collapsed;
+        // Leaving the curtain this way makes the panels visible again, so the
+        // keyboard has to come back with them — otherwise they sit there looking
+        // live and swallowing nothing. A plain Collapsed↔Half flip is left alone:
+        // a focused prompt over a collapsed pane is exactly what Cmd+T produces.
+        if leaving_curtain {
+            self.focused = self.restore_focused;
+        }
     }
 
     /// Esc: draw the panels aside to reveal the full terminal, and back again to
@@ -323,8 +336,13 @@ impl Terminal {
     pub fn toggle_curtain(&mut self) {
         if self.size == TerminalSize::Full {
             self.size = self.restore_size;
+            // The keys go back where the curtain found them: to the panel the
+            // user came from, or to the prompt if they were already there. The
+            // panel needs no bookkeeping — `AppState::active` never moved.
+            self.focused = self.restore_focused;
         } else {
             self.restore_size = self.size;
+            self.restore_focused = self.focused;
             self.size = TerminalSize::Full;
             // The curtain exists to work in the terminal, so it takes the keys.
             self.focused = true;
@@ -708,6 +726,47 @@ mod tests {
         assert_eq!(t.size(), TerminalSize::Full);
         t.toggle_curtain();
         assert_eq!(t.size(), TerminalSize::Half);
+    }
+
+    #[test]
+    fn the_curtain_hands_the_keyboard_back_to_whoever_had_it() {
+        // From a panel: the curtain takes the keys and must give them back, or
+        // the panels come back visible but dead.
+        let mut t = terminal();
+        assert!(!t.focused());
+        t.toggle_curtain();
+        assert!(t.focused());
+        t.toggle_curtain();
+        assert!(!t.focused(), "the panel gets the keyboard back");
+
+        // From the prompt: the user was already typing there, so that is where
+        // the second Esc leaves them.
+        t.toggle_focus();
+        assert!(t.focused());
+        t.toggle_curtain();
+        assert!(t.focused());
+        t.toggle_curtain();
+        assert!(t.focused(), "there was no panel to go back to");
+    }
+
+    #[test]
+    fn cmd_shift_t_out_of_the_curtain_also_returns_the_keyboard() {
+        let mut t = terminal();
+        t.toggle_curtain();
+        t.toggle_half();
+        assert_eq!(t.size(), TerminalSize::Collapsed);
+        assert!(!t.focused(), "the panels are visible again, so they take keys");
+    }
+
+    #[test]
+    fn a_plain_size_flip_leaves_the_keyboard_alone() {
+        let mut t = terminal();
+        t.toggle_focus();
+        t.toggle_half();
+        assert_eq!(t.size(), TerminalSize::Half);
+        assert!(t.focused(), "resizing the pane is not a request to leave it");
+        t.toggle_half();
+        assert!(t.focused());
     }
 
     #[test]
