@@ -21,6 +21,8 @@
 //! window is kept inside `[0, len-page]` so no blank space shows below a long
 //! listing. This is pure, I/O-free, and unit-tested below.
 
+use std::cmp::Ordering;
+use std::ops::Range;
 use std::path::Path;
 
 use crate::types::{DirListing, EntryKind, Motion, PanelState};
@@ -301,17 +303,69 @@ pub fn toggle_selection(state: &mut PanelState) {
     move_cursor(state, Motion::Down);
 }
 
-/// Add the entry under the cursor to the selection (if selectable and not already
-/// selected), then move the cursor. Backs the Shift+Arrow "select while moving"
-/// gesture (§5.3) — additive only; deselection is Space or `deselect_all`.
-pub fn select_and_move(state: &mut PanelState, motion: Motion) {
-    let idx = state.cursor_index;
-    if let Some(e) = state.entries.get(idx) {
-        if is_selectable(e) && !state.selection.contains(&idx) {
-            state.selection.push(idx);
+/// Flip the selection state of every selectable entry in `range`.
+///
+/// `selection` is a `Vec<usize>` scanned linearly, so toggling a long range
+/// against it directly would be quadratic (Shift+End over a big listing). Build a
+/// mask over the listing instead and collect back: O(len) per call, and it leaves
+/// the vector in ascending order. Nothing depends on insertion order — `select_all`
+/// already builds it ascending, the file operations sort it, and the frontend only
+/// tests membership.
+fn toggle_range(state: &mut PanelState, range: Range<usize>) {
+    let len = state.entries.len();
+    let range = range.start.min(len)..range.end.min(len);
+    if range.is_empty() {
+        return;
+    }
+    let mut marked = vec![false; len];
+    for &i in &state.selection {
+        if i < len {
+            marked[i] = true;
         }
     }
+    for i in range {
+        if is_selectable(&state.entries[i]) {
+            marked[i] = !marked[i];
+        }
+    }
+    state.selection = marked
+        .iter()
+        .enumerate()
+        .filter(|(_, &m)| m)
+        .map(|(i, _)| i)
+        .collect();
+}
+
+/// Move the cursor, flipping the selection of every entry it sweeps over — the
+/// Shift+Arrow gesture (§5.3). The range is **half-open**: the entry the cursor
+/// leaves is flipped, the entry it lands on is not. Repeated presses therefore
+/// paint one continuous run with nothing flipped twice, and the cursor always
+/// rests on the next entry that has not been touched yet.
+///
+/// Each entry flips independently, exactly as if Space had been pressed on it, so
+/// sweeping a mixed range inverts it rather than painting it uniform. There is no
+/// anchor, so reversing direction does not undo the previous sweep — that matches
+/// FarManager; `deselect_all` is the way out.
+///
+/// When the motion is clamped and the cursor cannot move (Shift+Down on the last
+/// entry, Shift+Left on `..`) there is no range to sweep, so this degenerates to
+/// flipping the entry under the cursor — the same thing Space does at the last
+/// entry. Without that the last file would be unreachable, since Right past the
+/// end lands *on* it and the half-open range would exclude it. `..` is never
+/// selectable, so the mirror case at the top of the listing is a no-op.
+pub fn toggle_range_and_move(state: &mut PanelState, motion: Motion) {
+    let len = state.entries.len();
+    if len == 0 {
+        return;
+    }
+    let from = state.cursor_index.min(len - 1);
     move_cursor(state, motion);
+    let to = state.cursor_index;
+    match to.cmp(&from) {
+        Ordering::Greater => toggle_range(state, from..to),
+        Ordering::Less => toggle_range(state, to + 1..from + 1),
+        Ordering::Equal => toggle_range(state, from..from + 1),
+    }
 }
 
 /// Select every selectable entry in the panel — all files/folders except `..`
@@ -635,20 +689,87 @@ mod tests {
     }
 
     #[test]
-    fn select_and_move_adds_current_then_advances_idempotently() {
-        let mut p = panel_with_dotdot(3);
-        p.geometry = PanelGeometry {
-            columns: 1,
-            rows_per_column: 10,
-        };
-        p.cursor_index = 1;
-        select_and_move(&mut p, Motion::Down);
-        assert_eq!(p.selection, vec![1]);
-        assert_eq!(p.cursor_index, 2);
-        // Re-selecting an already-selected index does not duplicate it.
-        p.cursor_index = 1;
-        select_and_move(&mut p, Motion::Down);
-        assert_eq!(p.selection, vec![1]);
+    fn shift_right_flips_the_column_it_leaves_but_not_the_landing_entry() {
+        let mut p = panel(20, 2, 8);
+        toggle_range_and_move(&mut p, Motion::Right); // 0 -> 8
+        assert_eq!(p.selection, (0..8).collect::<Vec<_>>());
+        assert_eq!(p.cursor_index, 8); // the entry landed on is untouched
+    }
+
+    #[test]
+    fn repeated_shift_right_paints_one_continuous_run() {
+        let mut p = panel(20, 2, 8);
+        toggle_range_and_move(&mut p, Motion::Right); // flips 0..8
+        toggle_range_and_move(&mut p, Motion::Right); // flips 8..16
+        // Nothing was flipped twice, so there is no gap at the seam.
+        assert_eq!(p.selection, (0..16).collect::<Vec<_>>());
+        assert_eq!(p.cursor_index, 16);
+    }
+
+    #[test]
+    fn a_sweep_flips_each_entry_independently() {
+        let mut p = panel(20, 2, 8);
+        p.selection = vec![1, 3, 4];
+        toggle_range_and_move(&mut p, Motion::Right); // sweeps 0..8
+        assert_eq!(p.selection, vec![0, 2, 5, 6, 7]);
+    }
+
+    #[test]
+    fn shift_left_mirrors_it_flipping_the_origin_not_the_landing_entry() {
+        let mut p = panel(20, 2, 8);
+        p.cursor_index = 16;
+        toggle_range_and_move(&mut p, Motion::Left); // 16 -> 8
+        assert_eq!(p.selection, (9..=16).collect::<Vec<_>>());
+        assert_eq!(p.cursor_index, 8);
+    }
+
+    #[test]
+    fn a_sweep_never_flips_dotdot() {
+        let mut p = panel_with_dotdot(5); // 0(..),1..5
+        p.cursor_index = 3;
+        toggle_range_and_move(&mut p, Motion::Home); // 3 -> 0, sweeping 1..=3
+        assert_eq!(p.selection, vec![1, 2, 3]);
+        assert_eq!(p.cursor_index, 0);
+        // Sweeping again from `..` has nowhere to go and nothing selectable to flip.
+        toggle_range_and_move(&mut p, Motion::Left);
+        assert_eq!(p.selection, vec![1, 2, 3]);
+        assert_eq!(p.cursor_index, 0);
+    }
+
+    #[test]
+    fn a_clamped_sweep_at_the_last_entry_flips_in_place() {
+        let mut p = panel(20, 2, 8);
+        p.cursor_index = 19;
+        toggle_range_and_move(&mut p, Motion::Down);
+        assert_eq!(p.selection, vec![19]);
+        assert_eq!(p.cursor_index, 19); // Down clamps, like Space on the last entry
+        // And pressing again flips it back off, also like Space there.
+        toggle_range_and_move(&mut p, Motion::Down);
+        assert!(p.selection.is_empty());
+    }
+
+    #[test]
+    fn shift_page_down_and_shift_end_flip_their_spans() {
+        let mut p = panel(40, 2, 8); // page = 16
+        toggle_range_and_move(&mut p, Motion::PageDown); // 0 -> 16
+        assert_eq!(p.selection, (0..16).collect::<Vec<_>>());
+        toggle_range_and_move(&mut p, Motion::End); // 16 -> 39
+        assert_eq!(p.selection, (0..39).collect::<Vec<_>>());
+        assert_eq!(p.cursor_index, 39);
+        // End lands *on* the last entry, so catching it takes one more press.
+        toggle_range_and_move(&mut p, Motion::Down);
+        assert_eq!(p.selection, (0..40).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn reversing_direction_does_not_undo_the_sweep() {
+        let mut p = panel(20, 2, 8);
+        toggle_range_and_move(&mut p, Motion::Right); // flips 0..8, cursor -> 8
+        toggle_range_and_move(&mut p, Motion::Left); // flips 1..=8, cursor -> 0
+        // There is no anchor: the origin stays marked and the far end picks one up.
+        // Documented behaviour (it is what FarManager does), not an undo.
+        assert_eq!(p.selection, vec![0, 8]);
+        assert_eq!(p.cursor_index, 0);
     }
 
     #[test]

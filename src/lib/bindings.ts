@@ -107,7 +107,11 @@ export const commands = {
 	setShowHidden: (panel: PanelId, value: boolean) => typedError<AppSnapshot, string>(__TAURI_INVOKE("set_show_hidden", { panel, value })),
 	/**  Toggle selection of the entry under the cursor (Space). `..` is a no-op. */
 	toggleSelection: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("toggle_selection", { panel })),
-	/**  Additively select the entry under the cursor, then move (Shift+Arrow). */
+	/**
+	 *  Move the cursor, flipping the selection of every entry it sweeps over
+	 *  (Shift+Arrow / PageUp / PageDown / Home / End). The entry the cursor leaves is
+	 *  flipped, the one it lands on is not, so repeated presses paint a continuous run.
+	 */
 	selectAndMove: (panel: PanelId, motion: Motion) => typedError<AppSnapshot, string>(__TAURI_INVOKE("select_and_move", { panel, motion })),
 	/**  Select all selectable entries in the panel (`*`). */
 	selectAll: (panel: PanelId) => typedError<AppSnapshot, string>(__TAURI_INVOKE("select_all", { panel })),

@@ -66,14 +66,22 @@ const NAVIGATION: &[ActionInfo] = &[
     a("panel.equalize", "Show this folder on the other panel", "Opens the active panel's folder on the opposite panel too. The keyboard stays where it is."),
 ];
 
+/// The eight Shift+motion sweeps differ only in direction, so they share one
+/// description rather than eight near-identical ones (§5.3).
+const SWEEP: &str = "Flips the selection of every entry swept over, but not the one it lands on.";
+
 const SELECTION: &[ActionInfo] = &[
     a("selection.toggle", "Toggle selection", "Selects or deselects the entry under the cursor and steps down."),
     a("selection.all", "Select all", ""),
     a("selection.none", "Deselect all", ""),
-    a("select.up", "Extend selection up", ""),
-    a("select.down", "Extend selection down", ""),
-    a("select.left", "Extend selection left", ""),
-    a("select.right", "Extend selection right", ""),
+    a("select.up", "Toggle selection up", SWEEP),
+    a("select.down", "Toggle selection down", SWEEP),
+    a("select.left", "Toggle selection left", SWEEP),
+    a("select.right", "Toggle selection right", SWEEP),
+    a("select.page_up", "Toggle selection a page up", SWEEP),
+    a("select.page_down", "Toggle selection a page down", SWEEP),
+    a("select.home", "Toggle selection to the first entry", SWEEP),
+    a("select.end", "Toggle selection to the last entry", SWEEP),
 ];
 
 const FILE_OPS: &[ActionInfo] = &[

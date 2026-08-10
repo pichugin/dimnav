@@ -175,6 +175,10 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         bind("select.down", &["Shift+ArrowDown"]),
         bind("select.left", &["Shift+ArrowLeft"]),
         bind("select.right", &["Shift+ArrowRight"]),
+        bind("select.page_up", &["Shift+PageUp"]),
+        bind("select.page_down", &["Shift+PageDown"]),
+        bind("select.home", &["Shift+Home"]),
+        bind("select.end", &["Shift+End"]),
         // File operations (§5.4).
         bind("op.copy", &["F5"]),
         bind("op.move", &["F6"]),

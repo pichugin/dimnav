@@ -507,7 +507,9 @@ pub fn toggle_selection(
     Ok(s.snapshot_after_input())
 }
 
-/// Additively select the entry under the cursor, then move (Shift+Arrow).
+/// Move the cursor, flipping the selection of every entry it sweeps over
+/// (Shift+Arrow / PageUp / PageDown / Home / End). The entry the cursor leaves is
+/// flipped, the one it lands on is not, so repeated presses paint a continuous run.
 #[tauri::command]
 #[specta::specta]
 pub fn select_and_move(
@@ -516,7 +518,7 @@ pub fn select_and_move(
     motion: Motion,
 ) -> Result<AppSnapshot, String> {
     let mut s = state.lock().map_err(lock_err)?;
-    fm_core::nav::select_and_move(s.panel_mut(panel), motion);
+    fm_core::nav::toggle_range_and_move(s.panel_mut(panel), motion);
     Ok(s.snapshot_after_input())
 }
 

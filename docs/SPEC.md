@@ -103,7 +103,12 @@ A concern was raised about whether a webview-based UI can deliver the snappy key
 - At any time, exactly one file has the **cursor** (like a mouse hover position).
 - Selection is a separate, persistent state layered on top of cursor position — analogous to Ctrl+clicking multiple files with a mouse.
 - **Space**: toggles selection of the file currently under the cursor, and is expected to be used repeatedly while moving the cursor to build up a multi-selection (select file → move cursor → select another file → ...).
-- **Shift + Arrow**: equivalent shortcut — selects the file under the cursor and moves in the arrow's direction (classic "select while moving" behavior).
+- **Shift + motion** (Arrow, PageUp/PageDown, Home/End): moves the cursor and **flips the selection of every entry the cursor sweeps over**, as if Space had been pressed on each — so a sweep over an already-selected run clears it, exactly the way Space on a selected file unselects it. This matters because Left/Right jump a whole column: marking only the entry under the cursor would skip everything the cursor flew past.
+  - The range is **half-open**: the entry the cursor *leaves* is flipped, the entry it *lands on* is not. Repeated presses therefore paint one continuous run with nothing flipped twice, and the cursor always rests on the next entry not yet touched.
+  - When the motion is clamped and the cursor cannot move (Shift+Down on the last entry, Shift+Left on `..`), there is no range to sweep, so it degenerates to flipping the entry under the cursor — the same thing Space does at the last entry. Without this the last file would be unreachable, since Right past the end lands *on* it and the half-open range would exclude it.
+  - Each entry flips **independently**; a mixed range comes out inverted, not painted to a single uniform state.
+  - There is **no anchor**, so reversing direction does not undo the previous sweep (FarManager behaves the same way). Deselect all (`-`) is the way out.
+  - `..` is never selectable, so it is never flipped.
 - **Select All (e.g., `*` key)**: selects all files/folders in the active panel.
 - Selection **persists** as the cursor moves through columns/pages — it does not reset on navigation.
 - Operations (copy, move, delete) act on the current selection; if no explicit selection exists, they act on the single file under the cursor.
@@ -208,7 +213,7 @@ All shortcuts must be **fully configurable**, with a sensible, documented defaul
 | Page up/down | PgUp / PgDn |
 | Jump to first/last file | Home / End |
 | Toggle selection on current file | Space |
-| Select + move | Shift + Arrow |
+| Toggle selection across a range, and move | Shift + Arrow / PgUp / PgDn / Home / End |
 | Select all | `*` |
 | Deselect all | `-` (or configurable) |
 | Enter directory / open file / run executable | Enter |

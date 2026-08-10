@@ -11,6 +11,20 @@ All notable changes to dimnav are recorded here. The format follows
 - **Ctrl+=** shows the active panel's folder on the other panel, without moving
   the keyboard off the panel you pressed it from. It is inert while the terminal,
   viewer, editor or a dialog has focus.
+- **Shift+PageUp / Shift+PageDown / Shift+Home / Shift+End** extend the
+  range-toggle gesture below to whole pages and to the ends of the listing.
+
+### Changed
+
+- **Shift+Arrow now toggles the whole range the cursor sweeps**, instead of
+  marking a single entry. Shift+Right used to jump a column and mark only the one
+  file it started on, silently skipping the seven it flew over, and it could never
+  unmark anything. Now every entry swept over is flipped, as if Space had been
+  pressed on each — so sweeping back over a marked run clears it. The entry the
+  cursor lands on is left untouched, so repeated presses paint one continuous run
+  and the cursor always rests on the next entry not yet touched. When the motion
+  is clamped and the cursor cannot move, the entry under it is flipped in place,
+  which is how the last file gets marked.
 
 ### Fixed
 
