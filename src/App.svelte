@@ -5,6 +5,7 @@
     AppSnapshot,
     EditDoc,
     Entry,
+    EntryCategory,
     ErrorResolution,
     GotoTarget,
     HelpBook,
@@ -229,28 +230,29 @@
     );
   }
 
-  // The listing color class for an entry (SPEC §4 theming). Pure presentation —
-  // first match wins, with hidden taking precedence over folder/type so the
-  // requested "hidden files/folders are grey" holds even for dotfolders. Values
-  // live in CSS custom properties (app.css) so a theme can remap them.
-  // Source-code extensions share the classic selection-blue (--file-code).
-  const CODE_EXTS = new Set([
-    "c", "h", "cc", "cxx", "cpp", "hpp", "hh", "rs", "ts", "tsx", "js", "jsx",
-    "mjs", "cjs", "java", "go", "py", "rb", "swift", "kt", "cs", "php", "sh",
-  ]);
+  // The listing color class for an entry (SPEC §4 theming). The *decision* is the
+  // core's — `fm_core::filetype::classify` stamps every entry with a category, so
+  // the panel and the Enter-runs-it rule can never disagree — and this is only
+  // the category → class name lookup. Values live in CSS custom properties
+  // (app.css) so a theme can remap them. `plain` deliberately maps to no class:
+  // the row keeps the default foreground, and denied/broken rows (which classify
+  // as `plain`) keep their own styling.
+  const CLASS_OF: Record<EntryCategory, string> = {
+    dir: "c-dir",
+    symlink: "c-symlink",
+    hidden: "c-hidden",
+    doc: "c-doc",
+    data: "c-data",
+    code: "c-code",
+    archive: "c-archive",
+    image: "c-image",
+    media: "c-media",
+    exec: "c-exec",
+    plain: "",
+  };
 
   function entryClass(e: Entry): string {
-    if (e.marker === "denied" || e.marker === "broken") return ""; // own styling
-    if (e.name !== ".." && e.name.startsWith(".")) return "c-hidden";
-    if (e.kind === "dir") return "c-dir";
-    if (e.kind === "symlink") return "c-symlink";
-    if (e.is_executable) return "c-exec";
-    const dot = e.name.lastIndexOf(".");
-    const ext = dot > 0 ? e.name.slice(dot + 1).toLowerCase() : "";
-    if (ext === "md" || ext === "txt") return "c-doc";
-    if (ext === "xml" || ext === "json") return "c-data";
-    if (CODE_EXTS.has(ext)) return "c-code";
-    return "";
+    return CLASS_OF[e.category];
   }
 
   function label(e: Entry): string {
@@ -2263,6 +2265,15 @@
   }
   .row.c-code {
     color: var(--file-code);
+  }
+  .row.c-archive {
+    color: var(--file-archive);
+  }
+  .row.c-image {
+    color: var(--file-image);
+  }
+  .row.c-media {
+    color: var(--file-media);
   }
   .row.denied {
     color: #d86b6b;

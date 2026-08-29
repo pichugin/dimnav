@@ -17,7 +17,7 @@ use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-use crate::types::{DirListing, Entry, EntryKind, EntryMarker, SortMode};
+use crate::types::{DirListing, Entry, EntryCategory, EntryKind, EntryMarker, SortMode};
 
 /// Resolves and memoizes uid/gid → name lookups for the span of a single
 /// listing. Most directories are owned by one or two users, so a tiny cache
@@ -98,7 +98,7 @@ pub fn list_dir(path: &str, show_hidden: bool, sort: SortMode) -> DirListing {
 
 /// The synthetic parent-directory entry.
 fn dotdot_entry() -> Entry {
-    Entry {
+    categorized(Entry {
         name: "..".to_string(),
         kind: EntryKind::Dir,
         size: 0,
@@ -112,9 +112,18 @@ fn dotdot_entry() -> Entry {
         nlink: 0,
         symlink_target: None,
         is_executable: false,
+        category: EntryCategory::Plain,
         marker: EntryMarker::Ok,
         computed_size: None,
-    }
+    })
+}
+
+/// Stamp an entry with its colour class. Every `Entry` this module hands out
+/// goes through here, so `category` can never be left at its placeholder — it is
+/// derived data, not something a construction site gets to choose.
+fn categorized(mut entry: Entry) -> Entry {
+    entry.category = crate::filetype::classify(&entry);
+    entry
 }
 
 /// Build an [`Entry`] from a path, never failing — read errors become markers.
@@ -163,7 +172,7 @@ fn entry_from_path(path: &Path, name: String, resolver: &mut OwnerResolver) -> E
     let uid = uid_of(meta);
     let gid = gid_of(meta);
 
-    Entry {
+    categorized(Entry {
         name,
         kind,
         size: meta.len(),
@@ -177,9 +186,10 @@ fn entry_from_path(path: &Path, name: String, resolver: &mut OwnerResolver) -> E
         nlink: nlink_of(meta),
         symlink_target,
         is_executable: is_executable(meta),
+        category: EntryCategory::Plain,
         marker,
         computed_size: None,
-    }
+    })
 }
 
 /// Map a std file type to our [`EntryKind`] (symlinks handled by the caller).
@@ -196,7 +206,7 @@ fn kind_of(ft: &std::fs::FileType) -> EntryKind {
 /// An entry whose metadata could not be read — surfaced as a Denied marker so a
 /// single bad child never fails the whole listing (§5.6).
 fn unreadable_entry(name: String, _err: &std::io::Error) -> Entry {
-    Entry {
+    categorized(Entry {
         name,
         kind: EntryKind::Special,
         size: 0,
@@ -210,9 +220,10 @@ fn unreadable_entry(name: String, _err: &std::io::Error) -> Entry {
         nlink: 0,
         symlink_target: None,
         is_executable: false,
+        category: EntryCategory::Plain,
         marker: EntryMarker::Denied,
         computed_size: None,
-    }
+    })
 }
 
 /// Modification time as Unix seconds, or 0 if unavailable.
@@ -335,17 +346,14 @@ fn by_name(a: &Entry, b: &Entry) -> std::cmp::Ordering {
 }
 
 /// Case-insensitive extension comparison; extension-less entries sort first. A
-/// leading dot does not start an extension (`.gitignore` has none), matching how
-/// the listing colours already classify names.
+/// leading dot does not start an extension (`.gitignore` has none) — the same
+/// rule the listing colours use, and the same code, so the two cannot drift.
 fn by_ext(a: &Entry, b: &Entry) -> std::cmp::Ordering {
     ext_of(&a.name).cmp(&ext_of(&b.name))
 }
 
 fn ext_of(name: &str) -> String {
-    match name.rfind('.') {
-        Some(i) if i > 0 => name[i + 1..].to_lowercase(),
-        _ => String::new(),
-    }
+    crate::filetype::extension(name).unwrap_or_default()
 }
 
 /// Create a directory named `name` inside `parent` (F7, §5.4). `name` may be a
@@ -531,6 +539,7 @@ mod tests {
             nlink: 0,
             symlink_target: None,
             is_executable: false,
+            category: EntryCategory::Plain,
             marker: EntryMarker::Ok,
             computed_size: None,
         }
@@ -634,6 +643,40 @@ mod tests {
 
         let (total, _) = dir_size(&root);
         assert_eq!(total, 500, "hardlinked inode counted once");
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    /// The reported bug, end to end: a directory whose every file carries the
+    /// exec bit (an SMB/exFAT copy) must still read as a mix of types, not as a
+    /// wall of green.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_of_plus_x_documents_is_not_all_executable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = crate::testutil::unique_dir("fm_core_plus_x_docs");
+        for name in ["a.pdf", "b.json", "c.sh", "d"] {
+            let path = root.join(name);
+            fs::write(&path, b"x").unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o750)).unwrap();
+        }
+
+        let listing = list_dir(root.to_str().unwrap(), true, SortMode::NameFoldersFirst);
+        let cat = |name: &str| {
+            listing
+                .entries
+                .iter()
+                .find(|e| e.name == name)
+                .unwrap_or_else(|| panic!("{name} missing from listing"))
+                .category
+        };
+
+        assert_eq!(cat("a.pdf"), EntryCategory::Doc);
+        assert_eq!(cat("b.json"), EntryCategory::Data);
+        // A script and an extension-less binary are what the bit is actually for.
+        assert_eq!(cat("c.sh"), EntryCategory::Exec);
+        assert_eq!(cat("d"), EntryCategory::Exec);
 
         fs::remove_dir_all(&root).ok();
     }

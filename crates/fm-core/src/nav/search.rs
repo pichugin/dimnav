@@ -109,7 +109,7 @@ fn find_match(entries: &[Entry], needle: &str) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{EntryKind, EntryMarker, PanelGeometry};
+    use crate::types::{EntryCategory, EntryKind, EntryMarker, PanelGeometry};
 
     fn ent(name: &str) -> Entry {
         Entry {
@@ -126,6 +126,7 @@ mod tests {
             nlink: 0,
             symlink_target: None,
             is_executable: false,
+            category: EntryCategory::Plain,
             marker: EntryMarker::Ok,
             computed_size: None,
         }

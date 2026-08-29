@@ -16,10 +16,13 @@
   --file-dir: #6fb3e0; /* folders: light blue */
   --file-symlink: #a6d8ff; /* symlinks: bright light blue, lighter than folders */
   --file-hidden: #8a8a92; /* dotfiles: grey, still legible on dark bg */
-  --file-doc: #c98a6a; /* .md/.txt: brownish-red */
+  --file-doc: #c98a6a; /* documents (.md/.txt/.pdf/office): brownish-red */
   --file-exec: #8fd18f; /* executables: light green */
-  --file-data: #4f8f6b; /* .xml/.json: dark green */
+  --file-data: #4f8f6b; /* data (.xml/.json/.yaml/.csv): dark green */
   --file-code: var(--accent); /* source code: the classic selection blue */
+  --file-archive: #c07ad8; /* archives: purple */
+  --file-image: #d87aa8; /* images: pink */
+  --file-media: #6fd0c8; /* audio/video: teal */
   --file-selected: #ffd633; /* selected rows: bright yellow */
 
   /* Terminal run indicator (SPEC §5.7). Idle is drawn at low opacity by the
@@ -51,6 +54,9 @@
     --file-exec: #3f9b52;
     --file-data: #2f6b4a;
     --file-code: var(--accent);
+    --file-archive: #7a3fa0;
+    --file-image: #a63f70;
+    --file-media: #2f8f86;
     --file-selected: #a67c00;
 
     --term-idle: #8a8a92;

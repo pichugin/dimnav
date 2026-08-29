@@ -513,7 +513,13 @@ export type Entry = {
 	nlink: number,
 	/**  Target path when `kind == Symlink`; `None` otherwise. */
 	symlink_target: string | null,
+	/**
+	 *  The raw POSIX fact: any of the three x bits is set. Note this is *not* the
+	 *  same question as "may we run it" — see [`crate::filetype::is_runnable`].
+	 */
 	is_executable: boolean,
+	/**  Which colour class this row falls into (§4). */
+	category: EntryCategory,
 	marker: EntryMarker,
 	/**
 	 *  Recursively computed folder size in bytes, when it has been calculated
@@ -522,6 +528,22 @@ export type Entry = {
 	 */
 	computed_size: number | null,
 };
+
+/**
+ *  What a listing row *is*, for colouring and for the execute-vs-launch decision
+ *  (§4). Derived from the name, kind and permission bits by
+ *  [`crate::filetype::classify`] — never set by hand.
+ */
+export type EntryCategory = "dir" | "symlink" | 
+/**
+ *  A dotfile or dotfolder. Outranks `Dir`, so a hidden folder reads as
+ *  hidden rather than as a folder.
+ */
+"hidden" | "doc" | "data" | "code" | "archive" | "image" | "media" | 
+/**  Carries the exec bit *and* nothing about its name says otherwise. */
+"exec" | 
+/**  Nothing claimed it — renders in the default foreground colour. */
+"plain";
 
 /**  What kind of filesystem object an entry is. */
 export type EntryKind = "file" | "dir" | "symlink" | "special";

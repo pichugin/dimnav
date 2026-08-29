@@ -628,7 +628,7 @@ fn is_local_volume(_path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fm_core::types::{Entry, EntryKind, EntryMarker};
+    use fm_core::types::{Entry, EntryCategory, EntryKind, EntryMarker};
 
     fn entry(name: &str, size: u64) -> Entry {
         Entry {
@@ -645,6 +645,7 @@ mod tests {
             nlink: 1,
             symlink_target: None,
             is_executable: false,
+            category: EntryCategory::Plain,
             marker: EntryMarker::Ok,
             computed_size: None,
         }

@@ -388,7 +388,7 @@ pub fn deselect_all(state: &mut PanelState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Entry, EntryKind, EntryMarker, PanelGeometry, PanelState};
+    use crate::types::{Entry, EntryCategory, EntryKind, EntryMarker, PanelGeometry, PanelState};
 
     fn ent(name: &str, kind: EntryKind) -> Entry {
         Entry {
@@ -405,6 +405,7 @@ mod tests {
             nlink: 0,
             symlink_target: None,
             is_executable: false,
+            category: EntryCategory::Plain,
             marker: EntryMarker::Ok,
             computed_size: None,
         }

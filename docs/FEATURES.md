@@ -214,6 +214,45 @@ Known limits:
 
 ---
 
+### Listing colours (§4)
+
+- [x] Entries are **coloured by category**: folders, symlinks, hidden (dotfiles
+      and dotfolders), documents, data, source code, archives, images, media, and
+      executables. Anything unclaimed keeps the default foreground rather than
+      being forced into a bucket
+- [x] **A known extension outranks the exec bit.** `mode & 0o111` is a poor
+      signal on macOS — files copied off an SMB/exFAT share, unpacked by an
+      archiver that does not restore modes, or lifted out of a DMG all arrive
+      `0755`/`0750` whatever they contain. Checking the bit first painted whole
+      folders of PDFs a uniform green, so a name that positively identifies a
+      document, dataset, archive, image or media file now wins over it
+- [x] Source nobody executes is covered by the same rule: a `+x` `.html`, `.css`
+      or `.rs` stays code-coloured, because the bit says nothing true about a
+      file that only ever gets rendered or compiled
+- [x] The bit still decides what it is good for: files whose name claims nothing
+      (`build`, `myapp.x86_64`) and **interpreted scripts, where executable beats
+      source** — a `0755` `deploy.sh` is green, the same file without the bit is
+      blue, which is what NC, FAR and `ls` all do
+- [x] **The same rule decides whether Enter runs a file.** `filetype::is_runnable`
+      is "the bit won and nothing about the name objected" — literally
+      `is_executable && classify(e) == Exec`, so the colour and the Enter
+      behaviour cannot disagree. Enter on a `0750` PDF now opens Preview instead
+      of trying to execute it; previously it executed
+- [x] Hidden outranks folder, so a dotfolder reads as hidden rather than as a
+      folder; unreadable and broken-symlink rows keep their own marker styling and
+      are never overpainted by a type colour
+- [x] **Core-authored**: `fm_core::filetype` owns the one extension table and
+      stamps every entry with its category during `list_dir`. The frontend holds
+      only a category → CSS-class map, so the panel and the execute-vs-launch
+      decision cannot drift apart (§3). Colour *values* are CSS custom properties
+      in `app.css`, so a theme remaps them without touching the classifier
+
+**Known limit.** The extension table is compiled in, not config-driven. `Config`
+carries a `theme` id that nothing reads yet — there is no palette loader for a
+user table to hang off, and building one is its own slice (§7).
+
+---
+
 ## Planned
 
 ### Terminal

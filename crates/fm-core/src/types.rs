@@ -55,6 +55,29 @@ pub enum EntryMarker {
     Broken,
 }
 
+/// What a listing row *is*, for colouring and for the execute-vs-launch decision
+/// (§4). Derived from the name, kind and permission bits by
+/// [`crate::filetype::classify`] — never set by hand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum EntryCategory {
+    Dir,
+    Symlink,
+    /// A dotfile or dotfolder. Outranks `Dir`, so a hidden folder reads as
+    /// hidden rather than as a folder.
+    Hidden,
+    Doc,
+    Data,
+    Code,
+    Archive,
+    Image,
+    Media,
+    /// Carries the exec bit *and* nothing about its name says otherwise.
+    Exec,
+    /// Nothing claimed it — renders in the default foreground colour.
+    Plain,
+}
+
 /// One row in a directory listing.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct Entry {
@@ -79,7 +102,11 @@ pub struct Entry {
     pub nlink: u32,
     /// Target path when `kind == Symlink`; `None` otherwise.
     pub symlink_target: Option<String>,
+    /// The raw POSIX fact: any of the three x bits is set. Note this is *not* the
+    /// same question as "may we run it" — see [`crate::filetype::is_runnable`].
     pub is_executable: bool,
+    /// Which colour class this row falls into (§4).
+    pub category: EntryCategory,
     pub marker: EntryMarker,
     /// Recursively computed folder size in bytes, when it has been calculated
     /// (F3) and is present in the size cache; `None` otherwise. Always `None`

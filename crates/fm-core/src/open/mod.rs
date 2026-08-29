@@ -3,7 +3,7 @@
 //! Decision logic: given the entry under the cursor, the requested
 //! [`OpenAction`], the panel's directory, and the [`Config`] file-type map,
 //! decide **what** the adapter should do — open the embedded viewer/editor,
-//! launch an external app, or (for Enter on an executable) run it. This module
+//! launch an external app, or (for Enter on a runnable file) run it. This module
 //! performs no process spawning and no side-effects; the `src-tauri` adapter acts
 //! on the returned [`OpenPlan`] (the same "core decides, adapter acts" split used
 //! for privilege elevation).
@@ -21,8 +21,9 @@
 //!    as hex, images as pictures. F4 on something it cannot edit (a binary, an
 //!    image, a file too big to hold in memory) degrades gracefully rather than
 //!    refusing.
-//! 3. Enter is unchanged: executables run, everything else goes to the system
-//!    default, so double-click behaviour still matches the OS.
+//! 3. Enter runs a *runnable* file — the exec bit minus the documents that only
+//!    carry it by accident (`crate::filetype::is_runnable`) — and sends
+//!    everything else to the system default, matching double-click behaviour.
 //!
 //! File associations are the [`plugin::FileTypeHandler`](crate::plugin) extension
 //! point in its simplest, config-driven form; the embedded text/hex/image
@@ -30,6 +31,9 @@
 
 use std::path::Path;
 
+// `extension` is shared with the listing colours (`crate::filetype`), so an
+// association and a colour can never disagree about what a name's extension is.
+use crate::filetype::{extension, is_runnable};
 use crate::types::{Config, Entry, EntryKind, FileProbe, MediaKind, OpenAction};
 
 /// What the adapter should do to fulfil an open request.
@@ -102,8 +106,11 @@ pub fn route(
 
     let path = Path::new(cwd).join(&entry.name).to_string_lossy().into_owned();
 
-    // Enter on an executable runs it, whatever the associations say.
-    if action == OpenAction::Open && entry.is_executable {
+    // Enter on a runnable file runs it, whatever the associations say. "Runnable"
+    // is deliberately narrower than the raw exec bit: a document that merely
+    // carries `+x` (a copy off an SMB share, an unpacked archive) must open, not
+    // execute — see `crate::filetype`.
+    if action == OpenAction::Open && is_runnable(entry) {
         return Some(OpenPlan::Execute {
             path,
             cwd: cwd.to_string(),
@@ -141,9 +148,9 @@ pub fn plan_open(
     cwd: &str,
     config: &Config,
 ) -> (Option<OpenPlan>, Option<FileProbe>) {
-    // Enter on an executable runs it without caring what is inside; every other
+    // Enter on a runnable file runs it without caring what is inside; every other
     // case may end up embedded, so sniff. The probe reads only a few KiB.
-    let probe = if action == OpenAction::Open && entry.is_executable {
+    let probe = if action == OpenAction::Open && is_runnable(entry) {
         None
     } else {
         crate::view::probe::probe(&Path::new(cwd).join(&entry.name)).ok()
@@ -195,20 +202,10 @@ fn resolve_handler(name: &str, action: OpenAction, config: &Config) -> Option<Ha
     value.map(|v| Handler::parse(&v))
 }
 
-/// Lower-cased extension (no dot), or `None`. A leading-dot name with no other
-/// dot (e.g. `.bashrc`) has no extension — matches the frontend's colour rule.
-fn extension(name: &str) -> Option<String> {
-    let dot = name.rfind('.')?;
-    if dot == 0 {
-        return None;
-    }
-    Some(name[dot + 1..].to_lowercase())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Eol, EntryMarker, FileAssociation, TextEncoding};
+    use crate::types::{Eol, EntryCategory, EntryMarker, FileAssociation, TextEncoding};
 
     fn entry(name: &str, kind: EntryKind, executable: bool) -> Entry {
         Entry {
@@ -225,6 +222,7 @@ mod tests {
             nlink: 0,
             symlink_target: None,
             is_executable: executable,
+            category: EntryCategory::Plain,
             marker: EntryMarker::Ok,
             computed_size: None,
         }
@@ -299,6 +297,21 @@ mod tests {
             embedded_mode(plan_probed(&exe, OpenAction::View, &cfg, MediaKind::Text, 40)),
             EmbeddedMode::Text
         );
+    }
+
+    /// Files copied off an SMB share arrive `0750` whatever they hold. Enter on
+    /// one of those must open it, not try to run a PDF as a program.
+    #[test]
+    fn enter_on_an_executable_document_launches_rather_than_executes() {
+        let cfg = Config::default();
+        for name in ["report.pdf", "Q3.xlsx", "swagger.json", "shipment.zip"] {
+            let doc = entry(name, EntryKind::File, true);
+            assert_eq!(
+                plan(&doc, OpenAction::Open, &cfg),
+                Some(OpenPlan::Launch { path: format!("/home/{name}"), app: None }),
+                "{name} carries +x by accident and must not be executed"
+            );
+        }
     }
 
     #[test]

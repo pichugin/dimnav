@@ -17,6 +17,7 @@
 //!
 //! - [`actions`] — the catalog of bindable actions and what each one means (§6).
 //! - [`fs`]     — filesystem engine: structured listings, metadata, async ops.
+//! - [`filetype`] — one table deciding an entry's colour class and whether it runs (§4).
 //! - [`nav`]    — the single cursor-index state machine + selection model (§5.2/§5.3).
 //! - [`ops`]    — copy/move/delete pipeline: collisions, recursion guard, results.
 //! - [`open`]   — Open/View/Edit routing: file-type→app decision, execute vs launch (§5.5).
@@ -30,6 +31,7 @@
 
 pub mod actions;
 pub mod config;
+pub mod filetype;
 pub mod fs;
 pub mod help;
 pub mod nav;

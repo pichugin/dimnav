@@ -32,6 +32,7 @@ export type {
   Config,
   DirListing,
   Entry,
+  EntryCategory,
   EntryKind,
   EntryMarker,
   ViewMode,
