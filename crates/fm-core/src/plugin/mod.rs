@@ -93,10 +93,14 @@ pub trait FsObserver {
     fn poke(&self);
 }
 
-/// **Phase-2 seam.** Where an executable's stdout/stderr is routed when the user
-/// runs it (§5.5 / §5.7). Phase 1 wires this to a simple modal output sink;
-/// Phase 2 swaps in the PTY-backed terminal without changing callers, so
-/// Enter-to-execute and the Esc terminal curtain slot in cleanly.
+/// Where an executable's stdout/stderr is routed when the user runs it
+/// (§5.5 / §5.7).
+///
+/// The seam paid off: Phase 1's throwaway modal sink was replaced by the embedded
+/// terminal in Phase 2 without any caller changing, which is what let
+/// Enter-to-execute and the Esc curtain slot in cleanly. The current implementor
+/// is `TerminalSink` in the adapter, which pipes a child of the login shell — not
+/// a PTY. Swapping in a PTY is a Planned item and, again, changes no caller.
 pub trait ExecutionSink {
     /// Append output bytes from the running process.
     fn write(&mut self, bytes: &[u8]);

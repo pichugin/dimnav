@@ -3,6 +3,11 @@
 Running record of what this file manager can do and what is still planned.
 `docs/SPEC.md` says what the app *should* be; this file says where it *is*.
 
+**[Outstanding](#outstanding) is the short answer to "what is left"** — phases, platform
+stubs, unimplemented extension points and known defects, in one place. The
+[Planned](#planned) list itemises the remaining features; the [Implemented](#implemented)
+sections record what shipped and why.
+
 > **Backfill pending.** This file was started during the terminal slice, so only
 > the terminal is filled in below. Everything shipped before it — navigation,
 > selection, copy/move/delete, sorting, the embedded viewer/editor — is listed
@@ -10,6 +15,88 @@ Running record of what this file manager can do and what is still planned.
 > pass.
 
 Section references are to `docs/SPEC.md`.
+
+---
+
+## Outstanding
+
+**Read this first when asking "what is left?"** — it is the consolidated answer, so the
+question does not have to be re-derived from the source each time. The
+[Planned](#planned) list further down itemises the remaining *features*; this section
+adds the phases, the platform stubs, the unimplemented extension points, and the known
+defects, with pointers.
+
+### Phases (SPEC §8)
+
+| Phase | State |
+|---|---|
+| 1 — MVP (macOS) | **Shipped** v0.1.0 |
+| 2 — Embedded terminal | **Shipped** v0.1.0 — pipe-based, not PTY (see the terminal limits above) |
+| 3 — Embedded editor/viewer | **Shipped** v0.1.0 |
+| 4 — Cross-platform (Windows/Linux) | **Not started** — see the stub table below |
+| 5 — Public plugin system | **Not started** — traits only, no loader and no host |
+| Future / backlog | Archive browsing, bookmarks, bulk rename, tree search, git column |
+
+SPEC §2 puts Windows/Linux at "Phase 2+" while §8 puts them at Phase 4. **§8 is the
+numbering this file follows.**
+
+### Phase 4 — every platform stub
+
+Each is a deliberate `#[cfg]` fallback rather than a bug. The ones that return *wrong
+data silently* are marked ⚠, because those are the ones that will not announce
+themselves when the port begins.
+
+| Location | Behaviour off macOS / off unix |
+|---|---|
+| `crates/fm-core/src/fs/watch.rs:468` | `DirHandle::open` → `Err(Unsupported)`; watching degrades to nothing. Windows must pass `FILE_SHARE_DELETE`, or holding the handle blocks deleting the watched directory |
+| `crates/fm-core/src/fs/watch.rs:350` | `O_PATH` is the Linux analogue to reach for; `O_RDONLY` is the placeholder |
+| `crates/fm-core/src/ops/mod.rs:811` | ⚠ `copy_symlink` copies the **resolved contents** instead of the link |
+| `crates/fm-core/src/fs/mod.rs:52`, `:253`–`:300` | Owner/group → `None`; uid/gid/nlink/mode → `0`; ⚠ `is_executable` → `false`, which would break the colour and execute classifier outright |
+| `src-tauri/src/commands.rs:1562` | `launch` → `Err`; opening files unsupported |
+| `src-tauri/src/ops_runtime.rs:196`, `:228` | `elevate`, `elevate_delete` → `Err` |
+| `src-tauri/src/terminal_runtime.rs:247` | No process group to signal; killing the child is the approximation |
+| `src-tauri/src/watch_runtime.rs:614` | ⚠ `is_local_volume` → unconditionally `true` (Linux wants `statfs.f_type`, Windows `GetDriveType`) |
+| `.github/workflows/release.yml:26` | Linux and Windows matrix entries commented out |
+
+### Phase 5 — extension points with no implementor
+
+`crates/fm-core/src/plugin/mod.rs` declares eight traits. Implemented in-tree:
+`HelpTopic` (About, Shortcuts), `FsObserver` (the watcher), `ExecutionSink` (the
+terminal). **Not implemented: `Command` — whose `run()` is commented out at
+`plugin/mod.rs:22` — `FileTypeHandler`, `ColumnProvider`, `Operation`, and
+`ThemeProvider`, which has only `id()` and would need widening to be usable.** SPEC §6a's
+"dogfood the extension system" therefore holds for three of eight points today.
+
+### Known defects
+
+- **Access denied is not a first-class listing state.** `fs/mod.rs:80` is
+  `if let Ok(read) = fs::read_dir(p)`, so a TCC-denied directory renders as an empty
+  listing with no error at all. Per-*child* denial is handled (`EntryMarker::Denied`); the
+  directory itself is not, and `DirListing` has no field to say so. SPEC §3 and §5.6 both
+  ask for better.
+- **`ConfigChangedEvent` is declared** (`src-tauri/src/events.rs:51`) **and emitted by
+  nothing.**
+- **`OpProgress.bytes_done` / `bytes_total` are always `0`** (`ops_runtime.rs:100`), cross
+  the wire, and are read by nothing — the progress bar is count-based. Either populate
+  them or drop them from the contract.
+
+### Test coverage
+
+~238 inline Rust unit tests; **no test files, no frontend test runner, no e2e.**
+Untested: `src-tauri/src/commands.rs` (1565 lines, all 67 handlers); `ops_runtime.rs`,
+which holds `sh_quote` and `applescript_escape` — the strings fed to `osascript … with
+administrator privileges`, and so the highest-risk untested code in the tree;
+`terminal_runtime.rs`; and `fm-core/src/state.rs`, whose `snapshot_after_input` is the
+documented "no call site can forget" chokepoint. `watch_runtime.rs` has three tests
+across 730 lines. There is no cross-platform CI, so every `#[cfg]` arm above is never
+compiled.
+
+### Deliberate non-goals
+
+Recorded so they are not mistaken for gaps: no undo in v1; the Mac App Store is out of
+scope (its sandbox would break the terminal and the `osascript` elevation); Intel Macs
+are unsupported and the floor is macOS 13; there is deliberately no `cargo fmt` gate; and
+full-screen TUI hosting is scoped out by SPEC §8.
 
 ---
 
@@ -159,7 +246,7 @@ The rest of two-panel navigation is still under
 - [x] **Ctrl+Enter** appends the name under the cursor to the command line,
       shell-quoted, without leaving the panel (§5.7)
 - [x] Command history: Up/Down recall, persisted to
-      `~/Library/Application Support/file-manager/history`
+      `~/Library/Application Support/dimnav/history`, beside `config.toml`
 - [x] `cd` built-in navigates the active panel (MC-style), `clear` / Ctrl+L
       empties the buffer
 - [x] Pane size and scrollback cap persisted in `config.toml` (§7)
@@ -229,6 +316,22 @@ Known limits:
   is renamed
 - FSEvents is inherently recursive, so a panel sitting on a huge tree receives and
   discards subtree events. The cost per discarded event is a path comparison
+
+---
+
+### Configuration (§7)
+
+- [x] **A broken line in `config.toml` costs that line, not the file.** `toml::from_str`
+      fails the *whole* document on a single wrong value, so a hand-edited
+      `trash_default = yes` used to discard panel directories, file associations and the
+      Trash flag along with the flag actually mistyped — silently, since loading cannot
+      report. Loading now falls back to a salvage pass that re-reads the document as a
+      raw table and keeps every top-level key that still deserializes, dropping only
+      those that do not
+- [x] The file is meant to be hand-edited, so this is the granularity a user can act on:
+      the setting they got wrong reverts to its default and everything else survives
+- [x] Load still **never fails** — an absent, unreadable or wholly unparsable file yields
+      defaults, and the app starts (§7: zero configuration is a working configuration)
 
 ---
 

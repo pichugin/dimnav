@@ -1,8 +1,9 @@
 //! Tauri adapter — the thin shell around `fm-core`.
 //!
 //! This crate is the ONLY one that knows about Tauri. It maps commands/events to
-//! `fm-core` and owns Tauri-specific concerns (window, plugins, and — later — the
-//! macOS-native elevation prompt). No business logic lives here (SPEC §3 / §10).
+//! `fm-core` and owns Tauri-specific concerns — the window, the Tauri plugins, the
+//! long-running op/terminal/watch runtimes, and the macOS-native elevation prompt
+//! (`ops_runtime`). No business logic lives here (SPEC §3 / §10).
 
 mod commands;
 mod events;

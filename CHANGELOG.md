@@ -38,6 +38,14 @@ All notable changes to dimnav are recorded here. The format follows
 
 ### Fixed
 
+- **A broken line in `config.toml` no longer costs the whole file.** TOML
+  deserialization fails the entire document on one wrong value, so a hand-edited
+  `trash_default = yes` used to take the panel directories, the file associations
+  and the Trash flag down with it — silently, because loading deliberately cannot
+  report. Loading now falls back to a salvage pass that keeps every top-level key
+  that still parses and drops only the one that does not, so a typo costs the
+  setting it is in. An absent or wholly unparsable file still yields defaults.
+
 - Closing the Esc terminal curtain now hands the keyboard back to wherever it was
   before the curtain went up. Pressing Esc twice from a panel used to bring the
   panels back while the command line silently kept the keys, so arrows and Enter

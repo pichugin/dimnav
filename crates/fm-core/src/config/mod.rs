@@ -81,9 +81,44 @@ pub fn save(config: &Config) {
 
 /// [`load`] against an explicit path (the testable half).
 pub fn load_from(path: &Path) -> Config {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| toml::from_str(&text).ok())
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Config::default();
+    };
+    match toml::from_str::<Config>(&text) {
+        Ok(config) => config,
+        Err(_) => salvage(&text),
+    }
+}
+
+/// Second chance for a config with one bad section in it.
+///
+/// `toml::from_str` fails the **whole document** on a single wrong value, so a
+/// hand-edited `trash_default = yes` would otherwise cost the user their panel
+/// directories, their file associations and their Trash flag along with it —
+/// silently, since [`load_from`] cannot report. That is a surprising amount of
+/// damage for one typo, and this file is meant to be hand-edited (§7).
+///
+/// So: re-read the document as a raw table and keep every top-level key that
+/// still deserializes when added to the ones already kept, dropping only those
+/// that do not. The result is that a bad entry costs that entry, which is the
+/// granularity a user can actually act on.
+///
+/// Quadratic in the number of top-level keys, which is a dozen, on a path that
+/// runs once per launch and only after a parse has already failed.
+fn salvage(text: &str) -> Config {
+    let Ok(table) = text.parse::<toml::Table>() else {
+        return Config::default();
+    };
+    let mut kept = toml::Table::new();
+    for (key, value) in table {
+        let mut probe = kept.clone();
+        probe.insert(key, value);
+        if toml::Value::Table(probe.clone()).try_into::<Config>().is_ok() {
+            kept = probe;
+        }
+    }
+    toml::Value::Table(kept)
+        .try_into::<Config>()
         .unwrap_or_default()
 }
 
@@ -499,6 +534,163 @@ mod tests {
         // Everything else falls back — hidden files shown, 2-column brief (§5.8).
         assert!(cfg.left_panel.show_hidden);
         assert_eq!(cfg.right_panel.view_mode, ViewMode::default());
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    /// A wrong scalar must not take the rest of the file down with it.
+    ///
+    /// `toml::from_str` fails the whole document on one bad value, so before
+    /// [`salvage`] this config cost the user their panel directories and their
+    /// associations as well as the flag they actually mistyped.
+    #[test]
+    fn a_broken_scalar_costs_only_itself() {
+        let path = temp_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "trash_default = \"yes\"\n\
+             theme = \"dark-minimal\"\n\
+             \n\
+             [right_panel]\n\
+             show_hidden = false\n",
+        )
+        .unwrap();
+
+        let cfg = load_from(&path);
+
+        // The bad line, and only the bad line, fell back to its default.
+        assert!(!cfg.trash_default);
+        // Everything else survived.
+        assert_eq!(cfg.theme, "dark-minimal");
+        assert!(!cfg.right_panel.show_hidden);
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    /// The same guarantee one level up: a malformed *table* costs that table.
+    #[test]
+    fn a_broken_table_costs_only_itself() {
+        let path = temp_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            "trash_default = true\n\
+             \n\
+             [left_panel]\n\
+             sort_mode = \"not-a-sort-mode\"\n\
+             \n\
+             [right_panel]\n\
+             start_dir = \"/tmp\"\n",
+        )
+        .unwrap();
+
+        let cfg = load_from(&path);
+
+        assert_eq!(cfg.left_panel.sort_mode, SortMode::default());
+        assert!(cfg.trash_default);
+        assert_eq!(cfg.right_panel.start_dir.as_deref(), Some("/tmp"));
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    /// A file this app itself wrote at 0.1.0 must keep loading, field for field.
+    /// Pinned as a literal rather than round-tripped, so a later change to the
+    /// struct cannot quietly redefine what "an old config" means.
+    #[test]
+    fn a_zero_one_zero_config_still_loads() {
+        let path = temp_path();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(
+            &path,
+            r#"trash_default = true
+theme = "classic"
+edit_max_bytes = 16777216
+
+[left_panel]
+start_dir = "/usr"
+sort_mode = "size"
+show_hidden = false
+
+[left_panel.view_mode]
+kind = "detailed"
+
+[right_panel]
+sort_mode = "name_folders_first"
+show_hidden = true
+
+[right_panel.view_mode]
+kind = "columns"
+columns = 3
+
+[viewer]
+wrap = true
+tab_width = 8
+hex_bytes_per_row = 16
+
+[terminal]
+scrollback_bytes = 1048576
+size = "collapsed"
+
+[[associations]]
+extensions = ["md"]
+edit = "Visual Studio Code"
+"#,
+        )
+        .unwrap();
+
+        let cfg = load_from(&path);
+
+        assert!(cfg.trash_default);
+        assert_eq!(cfg.left_panel.start_dir.as_deref(), Some("/usr"));
+        assert_eq!(cfg.left_panel.sort_mode, SortMode::Size);
+        assert_eq!(cfg.left_panel.view_mode, ViewMode::Detailed);
+        assert!(cfg.viewer.wrap);
+        assert_eq!(cfg.viewer.tab_width, 8);
+        assert_eq!(cfg.associations.len(), 1);
+        assert_eq!(cfg.associations[0].edit.as_deref(), Some("Visual Studio Code"));
+        // A field the old file never carried falls back rather than wiping the rest.
+        assert!(cfg.watch.enabled);
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    /// The field-order guard. TOML rejects a plain value emitted after a table,
+    /// so [`Config`]'s scalars must precede its tables, and `associations` — which
+    /// only takes its array-of-tables form once it is non-empty, which is why this
+    /// test populates it — must stay last.
+    ///
+    /// Without this, adding a field in the wrong position produces a
+    /// `ValueAfterTable` error at *save* time on a user's machine rather than in
+    /// CI.
+    #[test]
+    fn a_config_with_every_table_populated_round_trips() {
+        let path = temp_path();
+        let mut cfg = Config {
+            trash_default: true,
+            theme: "dark-minimal".to_string(),
+            ..Config::default()
+        };
+        cfg.left_panel.start_dir = Some("/usr".to_string());
+        cfg.right_panel.start_dir = Some("/tmp".to_string());
+        cfg.viewer.wrap = true;
+        cfg.terminal.scrollback_bytes = 2 << 20;
+        cfg.watch.enabled = false;
+        cfg.associations.push(FileAssociation {
+            extensions: vec!["rs".to_string()],
+            open: Some("Zed".to_string()),
+            view: None,
+            edit: None,
+        });
+
+        save_to(&path, &cfg).expect("a fully populated config must serialize");
+        let back = load_from(&path);
+
+        assert_eq!(back.theme, "dark-minimal");
+        assert_eq!(back.left_panel.start_dir.as_deref(), Some("/usr"));
+        assert!(back.viewer.wrap);
+        assert!(!back.watch.enabled);
+        assert_eq!(back.associations[0].open.as_deref(), Some("Zed"));
 
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }

@@ -43,8 +43,8 @@ pub enum OpenPlan {
     /// default ("Open"); `Some(app)` names a configured viewer/editor.
     Launch { path: String, app: Option<String> },
     /// The entry is executable and the user pressed Enter → run it, with `cwd` as
-    /// the working directory. Phase 1 routes this to a simple captured-output
-    /// modal; Phase 2 routes it to the embedded terminal (§5.7).
+    /// the working directory. Routed to the embedded terminal via
+    /// [`crate::plugin::ExecutionSink`] (§5.7).
     Execute { path: String, cwd: String },
     /// Open the file inside the app, in the embedded viewer or editor.
     Embedded { path: String, mode: EmbeddedMode },

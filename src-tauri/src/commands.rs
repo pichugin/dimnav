@@ -577,8 +577,9 @@ pub async fn navigate(
             Some((name, kind)) => {
                 let joined = Path::new(&cur_path).join(&name);
                 // Descend into directories; follow symlinks that resolve to a
-                // directory (SPEC §5.4a "follow for navigation"). Files are a
-                // no-op this slice (opening files is a later slice).
+                // directory (SPEC §5.4a "follow for navigation"). A file is a
+                // no-op *here* by design: opening one is `open_entry`'s job, so
+                // navigation has exactly one meaning.
                 let navigable =
                     kind == EntryKind::Dir || (kind == EntryKind::Symlink && joined.is_dir());
                 if navigable {

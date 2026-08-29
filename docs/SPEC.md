@@ -1,6 +1,6 @@
 # Two-Panel File Manager — Project Specification
 
-**Codename:** (TBD)
+**Codename:** dimnav (shipped name; bundle id `com.dimnav.desktop`)
 **Author:** Dima
 **Purpose:** Specification document for Claude Code to implement, maintain, and iteratively improve a modern, cross-platform, keyboard-driven two-panel file manager, inspired by Norton Commander / Midnight Commander / DOS Navigator.
 
@@ -19,7 +19,7 @@ Primary inspiration: Norton Commander, Midnight Commander, DOS Navigator, Total 
 ## 2. Target Platforms
 
 - **Phase 1 (MVP): macOS only.**
-- **Phase 2+:** Windows and Linux, once the core is stable on macOS.
+- **Phase 4:** Windows and Linux, once the core is stable on macOS. (§8 is the authoritative phase numbering; this section formerly said "Phase 2+".)
 - Architecture must remain cross-platform-friendly from day one (avoid macOS-only APIs in core logic) even though we ship macOS first.
 
 ---
@@ -30,7 +30,7 @@ Primary inspiration: Norton Commander, Midnight Commander, DOS Navigator, Total 
 |---|---|---|
 | Core logic / backend | **Rust** | File system operations, performance-critical logic, config management |
 | Application shell | **Tauri** | Cross-platform native window, packaging, OS integration |
-| Frontend UI | Web technologies (framework TBD — likely React or Svelte) | Rendered inside Tauri's webview |
+| Frontend UI | **Svelte** (decided at scaffolding) | Rendered inside Tauri's webview; kept thin per the swappable-frontend rule |
 | IPC | Tauri commands/events | Frontend ↔ Rust backend communication |
 
 ### Why Rust + Tauri
@@ -229,9 +229,9 @@ All shortcuts must be **fully configurable**, with a sensible, documented defaul
 | Close quick search (does not open the entry) | Esc / Enter *(while the box is open)* |
 | Erase a character of the quick search | Backspace *(while the box is open)* |
 | Toggle terminal / panels view | Esc *(Phase 2 — see below)* |
-| Cycle sort order | *(only if a non-conflicting key is free; else dropdown only)* |
-| Toggle hidden files | *(only if a non-conflicting key is free; else via panel control)* |
-| Cycle view/column mode | *(keyboard desired; panel control otherwise)* |
+| Cycle sort order | Ctrl+S |
+| Toggle hidden files | Ctrl+H |
+| Cycle view/column mode | Ctrl+1 … Ctrl+4 *(1–3 columns, detailed)* |
 | Refresh | Ctrl+R |
 | Quit | Cmd+Q (macOS convention) |
 
@@ -334,11 +334,11 @@ A plugin should be able to, at minimum:
 ---
 
 ## 9. Open Questions for Future Discussion
-- Exact frontend framework (React vs. Svelte vs. plain web components) — decide at scaffolding. Keep it thin per the swappable-frontend rule.
-- Terminal implementation depth: PTY-backed shell + lightweight renderer vs. a fuller emulator crate — spike at start of Phase 2.
+- ~~Exact frontend framework — decide at scaffolding.~~ **Resolved: Svelte** (§3). Kept thin per the swappable-frontend rule.
+- Terminal implementation depth: PTY-backed shell vs. a fuller emulator crate. **Partly settled:** Phase 2 shipped a *pipe-based* child of the login shell, which is what makes the stderr-based red/green run indicator possible. The PTY upgrade — and the trade it forces — is tracked under `docs/FEATURES.md` → Planned → Terminal.
 - Plugin runtime: WASM (recommended) vs. native dynamic vs. scripting bridge — confirm before Phase 5.
-- Which specific keys (if any) are free for sort / hidden-files / view-mode toggles without conflicting with app or macOS system shortcuts — determine during implementation.
-- Whether the terminal's working directory auto-syncs to the active panel by default or requires an explicit sync action (Phase 2).
+- ~~Which specific keys are free for sort / hidden-files / view-mode toggles.~~ **Resolved: Ctrl+S, Ctrl+H, Ctrl+1–4** (§6), all bound in `config::default_keymap`.
+- ~~Whether the terminal's working directory auto-syncs to the active panel.~~ **Resolved: it auto-syncs**, and the prompt follows the active panel.
 
 ---
 
