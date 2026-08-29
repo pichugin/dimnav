@@ -13,11 +13,14 @@
   let {
     page,
     message = "",
+    hints = {},
     onGeometry,
   }: {
     page: ViewPage;
     /** Transient status text, e.g. a failed search. */
     message?: string;
+    /** Action id → the chord to advertise, straight from the live keymap. */
+    hints?: Record<string, string>;
     onGeometry: (rows: number, cols: number) => void;
   } = $props();
 
@@ -63,14 +66,21 @@
     return `${v.toFixed(1)} ${units[u]}`;
   }
 
-  const fkeys: [string, string][] = [
-    ["F2", "Wrap"],
-    ["F4", "Hex"],
-    ["F5", "Goto"],
-    ["F6", "Edit"],
-    ["F7", "Search"],
-    ["Esc", "Close"],
+  // Actions, not keys — the chord beside each comes from the live keymap, so the
+  // bar follows a rebind on its own and drops anything bound to nothing.
+  const commands: [string, string][] = [
+    ["viewer.toggle_wrap", "Wrap"],
+    ["viewer.toggle_hex", "Hex"],
+    ["viewer.goto", "Goto"],
+    ["viewer.to_edit", "Edit"],
+    ["viewer.search", "Search"],
+    ["viewer.close", "Close"],
   ];
+  const fkeys = $derived<[string, string][]>(
+    commands
+      .map(([action, label]) => [hints[action] ?? "", label] as [string, string])
+      .filter(([key]) => key !== ""),
+  );
 </script>
 
 <div class="viewer">

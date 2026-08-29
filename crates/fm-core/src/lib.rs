@@ -23,6 +23,7 @@
 //! - [`open`]   — Open/View/Edit routing: file-type→app decision, execute vs launch (§5.5).
 //! - [`config`] — TOML config load/save; per-panel persistence; trash flag.
 //! - [`help`]     — the F1 help book: About + the live shortcut list (§6).
+//! - [`keys`]     — how a chord is spelled for a human: `Meta+s` → `⌘S` (§6).
 //! - [`plugin`]   — extension-point traits (Phase 1: definitions only, no loader).
 //! - [`view`]     — the embedded viewer/editor: type probe, paged sessions, docs (§5.5).
 //! - [`terminal`] — the embedded command line: scrollback, history, run status (§5.7).
@@ -34,6 +35,7 @@ pub mod config;
 pub mod filetype;
 pub mod fs;
 pub mod help;
+pub mod keys;
 pub mod nav;
 pub mod ops;
 pub mod open;

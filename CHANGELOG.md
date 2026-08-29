@@ -16,6 +16,16 @@ All notable changes to dimnav are recorded here. The format follows
 
 ### Changed
 
+- **The editor saves with ⌘S instead of F2.** F2 was the Far/MC inheritance, but
+  ⌘S is the key macOS users actually reach for; on Windows and Linux the same
+  binding resolves to Ctrl+S. F2 no longer saves — it keeps its viewer meaning
+  (word wrap).
+- **The F-key bars are now generated from the live keymap**, the way the F1 help
+  screen already was. All three bars — panels, viewer, editor — name actions, and
+  the chord printed beside each one comes from the core, so a rebind moves the bar
+  on its own and an unbound action drops off it. On macOS every existing label is
+  unchanged.
+
 - **Shift+Arrow now toggles the whole range the cursor sweeps**, instead of
   marking a single entry. Shift+Right used to jump a column and mark only the one
   file it started on, silently skipping the seven it flew over, and it could never

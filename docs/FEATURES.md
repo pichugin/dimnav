@@ -88,7 +88,8 @@ The rest of two-panel navigation is still under
       context (Panels / Viewer / Editor / Terminal / Help) and grouped by what
       the action does, each with a title and a short explanation
 - [x] Key chords are rendered the way the F-key bar renders them (`⌘⇧T`, `↑`,
-      `Space`), not as the internal chord strings
+      `Space`), not as the internal chord strings — one formatter,
+      `fm-core::keys::display_chord`, feeds both
 - [x] Quick-search field filters the list across **all** of it — context,
       category, key chord, action id, title and description. Multiple terms
       narrow (AND), and symbols are findable by name (`cmd` finds `⌘`)
@@ -103,6 +104,23 @@ The rest of two-panel navigation is still under
       plugin-contributed topic is a registry entry rather than a special case
 - [x] Deliberately does **not** open over a file-operation dialog — those are
       questions awaiting an answer
+
+### Keyboard hints (§6)
+
+- [x] The editor saves with **⌘S** — the platform's own chord, not FAR's F2. On
+      Windows and Linux the same binding is **Ctrl+S**, chosen at compile time in
+      `config::default_keymap`; nothing in the frontend knows which platform it is
+      on. F2 keeps its viewer meaning (word wrap) and no longer saves
+- [x] The **F-key bars are generated from the live keymap**, like the F1 help
+      screen (§6 — "help must be generated, never hand-written"). All three of
+      them — panels, viewer, editor — name *actions*, and the chord printed
+      beside each one is `KeyBinding::labels`, rendered core-side by
+      `fm-core::keys::display_chord`
+- [x] An action bound to nothing drops off its bar rather than advertising a key
+      that does nothing
+- [x] The editor and the viewer consult the keymap before letting a Cmd/Ctrl
+      combo through, so a modified chord can be bound there; combos that are
+      *not* bound still reach the OS and the text area untouched (⌘Q, ⌘A, ⌘C/V/Z)
 
 ### Embedded terminal (§5.7, §8 Phase 2)
 

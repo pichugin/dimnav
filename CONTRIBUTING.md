@@ -78,6 +78,15 @@ Two places, and a test enforces they agree:
 
 Miss either one and `catalog_covers_the_default_keymap` will tell you.
 
+That is all: the F1 help screen and the three F-key bars both read the keymap, so
+they follow a new or remapped chord on their own. **Never hand-write a key into a
+bar** — the bars name action ids and take the chord from `KeyBinding::labels`,
+rendered by `fm-core::keys::display_chord`. A bar entry is the third place only
+when you want a *new* action advertised there.
+
+A chord that differs by platform belongs in a `#[cfg(target_os = ...)]` constant
+next to `default_keymap`, the way `SAVE_CHORD` (⌘S / Ctrl+S) does it.
+
 ### Icons
 
 The app icon is generated from the emblem artwork:

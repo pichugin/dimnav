@@ -324,9 +324,9 @@ export const commands = {
 	viewToEdit: (id: string) => typedError<EditDoc, string>(__TAURI_INVOKE("view_to_edit", { id })),
 	viewClose: (id: string) => typedError<null, string>(__TAURI_INVOKE("view_close", { id })),
 	/**
-	 *  Write the buffer back (F2). `force` answers a previous `Conflict` outcome
-	 *  with "overwrite anyway". The outcome is structured, never a thrown error
-	 *  (§5.6).
+	 *  Write the buffer back (`editor.save`). `force` answers a previous `Conflict`
+	 *  outcome with "overwrite anyway". The outcome is structured, never a thrown
+	 *  error (§5.6).
 	 */
 	editSave: (id: string, text: string, force: boolean) => typedError<SaveOutcome, string>(__TAURI_INVOKE("edit_save", { id, text, force })),
 	/**  Drop back from the editor to the viewer on the same file (F6). */
@@ -480,8 +480,8 @@ export type EditDoc = {
 	encoding: TextEncoding,
 	eol: Eol,
 	/**
-	 *  True when the file is not writable — F2 reports this rather than failing
-	 *  at write time.
+	 *  True when the file is not writable — the editor reports this up front
+	 *  rather than failing at write time.
 	 */
 	read_only: boolean,
 };
@@ -658,6 +658,14 @@ export type KeyBinding = {
 	context: string,
 	action: string,
 	keys: string[],
+	/**
+	 *  Each chord in `keys`, in the same order, as the user should see it —
+	 *  `"⌘S"` on macOS, `"Ctrl+S"` elsewhere. Rendered core-side by
+	 *  [`crate::keys::display_chord`] so a renderer painting the F-key bar never
+	 *  has to know which platform it is on, or how a chord is spelled
+	 *  (CLAUDE.md — the frontend is a thin, swappable layer).
+	 */
+	labels: string[],
 };
 
 /**

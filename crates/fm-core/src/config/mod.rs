@@ -100,6 +100,34 @@ pub fn save_to(path: &Path, config: &Config) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| format!("could not replace config: {e}"))
 }
 
+/// One binding, with its display labels filled in from its chords.
+///
+/// Every binding goes through here rather than being built inline, so a chord
+/// can never reach the frontend without the label the F-key bar paints it with
+/// (`crate::keys::display_chord`).
+fn binding(context: &str, action: &str, keys: &[&str]) -> KeyBinding {
+    let keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+    KeyBinding {
+        context: context.to_string(),
+        action: action.to_string(),
+        labels: keys.iter().map(|k| crate::keys::display_chord(k)).collect(),
+        keys,
+    }
+}
+
+/// The editor's save chord. macOS users reach for ⌘S; Windows and Linux users
+/// reach for Ctrl+S. This is the first binding that differs by platform — SPEC
+/// §8 Phase 4 books the wider "Cmd vs Ctrl" audit, and this is where that
+/// pattern starts.
+///
+/// `Meta+s`, not `Meta+S`: with a non-shift modifier held the frontend
+/// lower-cases the letter, for the reason spelled out at `terminal.toggle_half`
+/// below.
+#[cfg(target_os = "macos")]
+const SAVE_CHORD: &str = "Meta+s";
+#[cfg(not(target_os = "macos"))]
+const SAVE_CHORD: &str = "Ctrl+s";
+
 /// The default keymap, sourced from the core so the webview never hardcodes keys
 /// (SPEC §6). `keys` are **chord strings** the frontend builds from a
 /// `KeyboardEvent`: modifiers in the fixed order `Ctrl+Meta+Alt+Shift+<key>`,
@@ -118,36 +146,12 @@ pub fn save_to(path: &Path, config: &Config) -> Result<(), String> {
 /// carries the human-readable text the F1 help screen renders. A test enforces
 /// that in both directions.
 pub fn default_keymap() -> Vec<KeyBinding> {
-    let bind = |action: &str, keys: &[&str]| KeyBinding {
-        context: "panels".to_string(),
-        action: action.to_string(),
-        keys: keys.iter().map(|k| k.to_string()).collect(),
-    };
-    let viewer = |action: &str, keys: &[&str]| KeyBinding {
-        context: "viewer".to_string(),
-        action: action.to_string(),
-        keys: keys.iter().map(|k| k.to_string()).collect(),
-    };
-    let editor = |action: &str, keys: &[&str]| KeyBinding {
-        context: "editor".to_string(),
-        action: action.to_string(),
-        keys: keys.iter().map(|k| k.to_string()).collect(),
-    };
-    let terminal = |action: &str, keys: &[&str]| KeyBinding {
-        context: "terminal".to_string(),
-        action: action.to_string(),
-        keys: keys.iter().map(|k| k.to_string()).collect(),
-    };
-    let help = |action: &str, keys: &[&str]| KeyBinding {
-        context: "help".to_string(),
-        action: action.to_string(),
-        keys: keys.iter().map(|k| k.to_string()).collect(),
-    };
-    let search = |action: &str, keys: &[&str]| KeyBinding {
-        context: "search".to_string(),
-        action: action.to_string(),
-        keys: keys.iter().map(|k| k.to_string()).collect(),
-    };
+    let bind = |action: &str, keys: &[&str]| binding("panels", action, keys);
+    let viewer = |action: &str, keys: &[&str]| binding("viewer", action, keys);
+    let editor = |action: &str, keys: &[&str]| binding("editor", action, keys);
+    let terminal = |action: &str, keys: &[&str]| binding("terminal", action, keys);
+    let help = |action: &str, keys: &[&str]| binding("help", action, keys);
+    let search = |action: &str, keys: &[&str]| binding("search", action, keys);
     vec![
         // Cursor motion (§5.2).
         bind("cursor.up", &["ArrowUp"]),
@@ -271,7 +275,14 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         // --- Embedded editor (§5.5) -----------------------------------------
         // Everything else in the editor is text entry, so only the commands are
         // bound; Esc prompts when the buffer is dirty.
-        editor("editor.save", &["F2"]),
+        //
+        // Save is the platform's own chord rather than FAR's F2 — ⌘S here, Ctrl+S
+        // on Windows and Linux. Off macOS that makes `Ctrl+s` the save key *and*
+        // `panel.cycle_sort` above, which is fine: bindings are scoped by context
+        // and the editor covers the whole window while it is open, so the two can
+        // never both be live (`no_context_binds_one_chord_twice` pins that the
+        // overlap stays across contexts and never within one).
+        editor("editor.save", &[SAVE_CHORD]),
         editor("editor.to_view", &["F6"]),
         editor("editor.close", &["Escape"]),
         // --- Help (§6) -------------------------------------------------------
@@ -311,6 +322,73 @@ mod tests {
     /// A fresh, empty directory to hang legacy/current config dirs off.
     fn temp_root() -> PathBuf {
         unique_dir("fm_core_mig")
+    }
+
+    /// Every chord must arrive with the label the F-key bar paints it with. A
+    /// binding whose label went missing would silently drop out of the bar,
+    /// which filters unlabelled actions away.
+    #[test]
+    fn every_binding_carries_a_label_per_key() {
+        for b in default_keymap() {
+            assert_eq!(
+                b.keys.len(),
+                b.labels.len(),
+                "{}/{} has {} chords but {} labels",
+                b.context,
+                b.action,
+                b.keys.len(),
+                b.labels.len(),
+            );
+            assert!(
+                b.labels.iter().all(|l| !l.is_empty()),
+                "{}/{} has an empty label",
+                b.context,
+                b.action,
+            );
+        }
+    }
+
+    /// Save is the platform's chord, not FAR's F2. The negative half matters as
+    /// much as the positive one: F2 still toggles wrap in the viewer, so a stray
+    /// editor binding for it would be a real ambiguity, not a harmless alias.
+    #[test]
+    fn the_editor_saves_with_the_platform_chord() {
+        let keymap = default_keymap();
+        let save = keymap
+            .iter()
+            .find(|b| b.context == "editor" && b.action == "editor.save")
+            .expect("the editor binds a save action");
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(save.keys, vec!["Meta+s"]);
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(save.keys, vec!["Ctrl+s"]);
+
+        assert!(
+            !keymap
+                .iter()
+                .any(|b| b.context == "editor" && b.keys.iter().any(|k| k == "F2")),
+            "F2 no longer belongs to the editor",
+        );
+    }
+
+    /// Two bindings in one context racing for the same chord would make which
+    /// action fires depend on map-insertion order. Across contexts it is fine and
+    /// deliberate — off macOS `Ctrl+s` is both `editor.save` and
+    /// `panel.cycle_sort` — because only one context is ever live.
+    #[test]
+    fn no_context_binds_one_chord_twice() {
+        let mut seen = std::collections::BTreeSet::new();
+        for b in default_keymap() {
+            for k in &b.keys {
+                assert!(
+                    seen.insert((b.context.clone(), k.clone())),
+                    "{} binds {k:?} twice, the second time to {}",
+                    b.context,
+                    b.action,
+                );
+            }
+        }
     }
 
     #[test]

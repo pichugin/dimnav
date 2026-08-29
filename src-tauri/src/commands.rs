@@ -1255,9 +1255,9 @@ pub fn view_close(view_state: State<'_, ViewState>, id: String) -> Result<(), St
 
 // --- Embedded editor (§5.5) --------------------------------------------------
 
-/// Write the buffer back (F2). `force` answers a previous `Conflict` outcome
-/// with "overwrite anyway". The outcome is structured, never a thrown error
-/// (§5.6).
+/// Write the buffer back (`editor.save`). `force` answers a previous `Conflict`
+/// outcome with "overwrite anyway". The outcome is structured, never a thrown
+/// error (§5.6).
 #[tauri::command]
 #[specta::specta]
 pub fn edit_save(

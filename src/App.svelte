@@ -179,6 +179,11 @@
 
   // context -> chord string -> action id, built from the core-provided keymap.
   let keymaps: Record<string, Record<string, string>> = {};
+  // The same keymap read the other way: context -> action id -> the chord as the
+  // user should see it (`⌘S`, `⇧F6`, `Space`). This is what the F-key bars paint,
+  // so a rebind moves them without anyone editing a label (SPEC §6 — help is
+  // generated, never hand-written).
+  let hints: Record<string, Record<string, string>> = $state({});
   const listingEls: Record<PanelId, HTMLElement | null> = { left: null, right: null };
 
   // Canonical chord for a KeyboardEvent: modifiers in the fixed order
@@ -295,6 +300,22 @@
       for (const k of b.keys) ctx[k] = b.action;
     }
     return map;
+  }
+
+  // The chord to advertise for each action: the first one bound, since an action
+  // with two chords (op.delete is F8 *and* Del) wants one of them on the bar.
+  function buildHints(bindings: KeyBinding[]): Record<string, Record<string, string>> {
+    const map: Record<string, Record<string, string>> = {};
+    for (const b of bindings) {
+      const label = b.labels[0];
+      if (label) (map[b.context] ??= {})[b.action] = label;
+    }
+    return map;
+  }
+
+  /** The chord the bars show for one action, or `""` when nothing is bound. */
+  function hint(context: string, action: string): string {
+    return hints[context]?.[action] ?? "";
   }
 
   const PROMPT_TITLES: Record<TextPrompt["kind"], string> = {
@@ -985,7 +1006,7 @@
   async function editorToView() {
     if (!editorDoc) return;
     if (editorDirty) {
-      overlayMessage = "Save (F2) before switching to the viewer";
+      overlayMessage = `Save (${hint("editor", "editor.save")}) before switching to the viewer`;
       return;
     }
     try {
@@ -1306,12 +1327,18 @@
     // The embedded surfaces own the keyboard while they are open (§6). In the
     // editor, anything not bound to a command is text the user is typing, so it
     // must fall through to the <textarea> untouched.
+    //
+    // Like the terminal branch above, and unlike the panels below, this must NOT
+    // bail out on Cmd/Ctrl before consulting the keymap — the editor's save is
+    // ⌘S (Ctrl+S off macOS), so a blanket bail-out would make it unreachable.
     if (keyContext !== "panels") {
-      if (e.metaKey || e.ctrlKey) return;
       const bound = keymaps[keyContext]?.[chord(e)];
       if (!bound) {
-        // The viewer has no text entry, so unbound keys do nothing there.
-        if (keyContext === "viewer") e.preventDefault();
+        // An unbound Cmd/Ctrl combo belongs to the OS or to the textarea — Cmd+Q,
+        // Cmd+A, Cmd+C/V/Z — so it must pass untouched from either surface.
+        // Otherwise: the viewer has no text entry, so unbound keys do nothing
+        // there; in the editor they are simply the user typing.
+        if (keyContext === "viewer" && !e.metaKey && !e.ctrlKey) e.preventDefault();
         return;
       }
       const handled =
@@ -1407,7 +1434,9 @@
     const unlisten: UnlistenFn[] = [];
     (async () => {
       try {
-        keymaps = buildKeymap(await nav.getKeymap());
+        const keymap = await nav.getKeymap();
+        keymaps = buildKeymap(keymap);
+        hints = buildHints(keymap);
         snapshot = await nav.init();
 
         // Fire-and-forget: the panels must not wait on a network round trip to
@@ -1529,25 +1558,36 @@
   // byte size, modified/created datetimes), shown beside the name.
   const focusedMeta = $derived.by(() => focusedInfo(snapshot[snapshot.active]));
 
-  // Function-key hints. While Shift is held, F6 advertises its shifted action
-  // (Rename) instead of Move, so the bar reflects what the next keystroke does.
-  const fkeys = $derived<[string, string][]>([
-    ["F1", "Help"],
-    ["F3", "View"],
-    ["F4", "Edit"],
-    ["F5", "Copy"],
-    shiftHeld ? ["⇧F6", "Rename"] : ["F6", "Move"],
-    ["F7", "MkDir"],
-    ["F8", "Delete"],
-    ["Space", "Select"],
-    ["*", "All"],
-    ["Tab", "Switch"],
-    ["Enter", "Open"],
-    ["⌫", "Up"],
-    // The terminal is invisible until you know it is there (§5.7).
-    ["⌘T", "Term"],
-    [snapshot.terminal.size === "collapsed" ? "⌘⇧T" : "⌘⇧T", snapshot.terminal.size === "collapsed" ? "Output" : "Hide"],
-  ]);
+  // Function-key hints: an action id and the terse name to print beside its key.
+  // The key itself comes from the live keymap, never from a literal here, so a
+  // rebind moves the bar on its own — and an action nobody has bound drops off
+  // it rather than advertising a key that does nothing.
+  //
+  // While Shift is held, F6 advertises its shifted action (Rename) instead of
+  // Move, so the bar reflects what the next keystroke does.
+  const fkeys = $derived<[string, string][]>(
+    (
+      [
+        ["help.open", "Help"],
+        ["open.view", "View"],
+        ["open.edit", "Edit"],
+        ["op.copy", "Copy"],
+        shiftHeld ? ["op.rename", "Rename"] : ["op.move", "Move"],
+        ["op.mkdir", "MkDir"],
+        ["op.delete", "Delete"],
+        ["selection.toggle", "Select"],
+        ["selection.all", "All"],
+        ["panel.switch", "Switch"],
+        ["nav.enter", "Open"],
+        ["nav.parent", "Up"],
+        // The terminal is invisible until you know it is there (§5.7).
+        ["terminal.focus", "Term"],
+        ["terminal.toggle_half", snapshot.terminal.size === "collapsed" ? "Output" : "Hide"],
+      ] as [string, string][]
+    )
+      .map(([action, name]) => [hint("panels", action), name] as [string, string])
+      .filter(([key]) => key !== ""),
+  );
 </script>
 
 <main class="app">
@@ -1858,11 +1898,13 @@
       bind:text={editorText}
       dirty={editorDirty}
       message={overlayMessage}
+      hints={hints.editor ?? {}}
     />
   {:else if viewerPage}
     <Viewer
       page={viewerPage}
       message={overlayMessage}
+      hints={hints.viewer ?? {}}
       onGeometry={(rows, cols) => void viewerDo(() => viewer.setViewport(viewerPage!.id, rows, cols))}
     />
   {/if}

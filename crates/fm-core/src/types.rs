@@ -696,8 +696,8 @@ pub struct EditDoc {
     pub text: String,
     pub encoding: TextEncoding,
     pub eol: Eol,
-    /// True when the file is not writable — F2 reports this rather than failing
-    /// at write time.
+    /// True when the file is not writable — the editor reports this up front
+    /// rather than failing at write time.
     pub read_only: bool,
 }
 
@@ -746,6 +746,12 @@ pub struct KeyBinding {
     pub context: String,
     pub action: String,
     pub keys: Vec<String>,
+    /// Each chord in `keys`, in the same order, as the user should see it —
+    /// `"⌘S"` on macOS, `"Ctrl+S"` elsewhere. Rendered core-side by
+    /// [`crate::keys::display_chord`] so a renderer painting the F-key bar never
+    /// has to know which platform it is on, or how a chord is spelled
+    /// (CLAUDE.md — the frontend is a thin, swappable layer).
+    pub labels: Vec<String>,
 }
 
 /// Persisted per-panel preferences, restored on the next launch (§5.8 / §7).

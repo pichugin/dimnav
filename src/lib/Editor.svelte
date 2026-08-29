@@ -4,8 +4,8 @@
   // A plain text widget, deliberately: the core owns the *document* — encoding,
   // line endings, permissions, and the file's on-disk identity — while this owns
   // only the buffer being typed into, which is what buys native undo, selection,
-  // and IME for free. Nothing here decides anything about the file; F2 hands the
-  // text back to the core, which does the rest.
+  // and IME for free. Nothing here decides anything about the file; `editor.save`
+  // hands the text back to the core, which does the rest.
   import type { EditDoc } from "./ipc";
 
   let {
@@ -13,12 +13,15 @@
     text = $bindable(),
     dirty = false,
     message = "",
+    hints = {},
   }: {
     doc: EditDoc;
     text: string;
     dirty?: boolean;
     /** Transient status text, e.g. the result of the last save. */
     message?: string;
+    /** Action id → the chord to advertise, straight from the live keymap. */
+    hints?: Record<string, string>;
   } = $props();
 
   let area: HTMLTextAreaElement | null = $state(null);
@@ -59,11 +62,19 @@
   };
   const eolLabel: Record<string, string> = { lf: "LF", crlf: "CRLF", cr: "CR" };
 
-  const fkeys: [string, string][] = [
-    ["F2", "Save"],
-    ["F6", "View"],
-    ["Esc", "Close"],
+  // The bar names actions, not keys: the chord beside each one comes from the
+  // keymap, so ⌘S here is Ctrl+S on Windows without this file knowing. An action
+  // that is bound to nothing is left off rather than advertised without a key.
+  const commands: [string, string][] = [
+    ["editor.save", "Save"],
+    ["editor.to_view", "View"],
+    ["editor.close", "Close"],
   ];
+  const fkeys = $derived<[string, string][]>(
+    commands
+      .map(([action, label]) => [hints[action] ?? "", label] as [string, string])
+      .filter(([key]) => key !== ""),
+  );
 </script>
 
 <div class="editor">

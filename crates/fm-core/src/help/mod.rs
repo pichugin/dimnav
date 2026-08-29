@@ -10,11 +10,15 @@
 //! matching rule, not a paint instruction, so it lives here where it can be unit
 //! tested and where a future Iced frontend inherits it for free.
 //!
+//! Chords are painted by [`crate::keys::display_chord`], the same formatter the
+//! F-key bars read their labels from, so help and the bars cannot disagree.
+//!
 //! Topics are written against [`crate::plugin::HelpTopic`] rather than being
 //! special-cased, so a plugin-contributed topic in Phase 5 is a push into
 //! [`book`]'s registry and nothing more (SPEC §6a).
 
 use crate::actions;
+use crate::keys::display_chord;
 use crate::plugin::HelpTopic;
 use crate::types::{
     AboutBody, AppInfo, HelpBody, HelpBook, HelpLine, HelpLink, HelpTopicView, KeyBinding,
@@ -53,73 +57,6 @@ const SECTIONS: &[(&str, &str)] = &[
     ("terminal", "Terminal"),
     ("help", "Help"),
 ];
-
-// ---------------------------------------------------------------------------
-// Chord rendering
-// ---------------------------------------------------------------------------
-
-/// How one modifier part of a chord is written, separator included. macOS spells
-/// modifiers as glyphs run together (`⌘⇧T`); everywhere else they keep their
-/// names and the `+` separators (`Ctrl+Shift+T`).
-fn modifier_symbol(part: &str) -> String {
-    #[cfg(target_os = "macos")]
-    {
-        match part {
-            "Ctrl" => "⌃",
-            "Meta" => "⌘",
-            "Alt" => "⌥",
-            "Shift" => "⇧",
-            other => other,
-        }
-        .to_string()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        match part {
-            "Meta" => "Super+".to_string(),
-            other => format!("{other}+"),
-        }
-    }
-}
-
-/// The printable name of the non-modifier key in a chord.
-fn key_label(key: &str) -> String {
-    match key {
-        " " => "Space".to_string(),
-        "ArrowUp" => "↑".to_string(),
-        "ArrowDown" => "↓".to_string(),
-        "ArrowLeft" => "←".to_string(),
-        "ArrowRight" => "→".to_string(),
-        "PageUp" => "PgUp".to_string(),
-        "PageDown" => "PgDn".to_string(),
-        "Backspace" => "⌫".to_string(),
-        "Escape" => "Esc".to_string(),
-        "Delete" => "Del".to_string(),
-        // Printable keys are reported lower-case when a modifier is held
-        // (config::default_keymap), but read as shortcuts upper-case.
-        k if k.chars().count() == 1 => k.to_uppercase(),
-        k => k.to_string(),
-    }
-}
-
-/// Turn an internal chord string (`"Meta+Shift+t"`, `"ArrowDown"`, `" "`) into
-/// what the user sees (`"⌘⇧T"`, `"↓"`, `"Space"`).
-///
-/// Modifier order is the chord's own — `Ctrl+Meta+Alt+Shift` — rather than the
-/// macOS HIG order, so the output matches the F-key hint bar the app already
-/// shows (`⌘⇧T`).
-pub fn display_chord(chord: &str) -> String {
-    let mut parts = chord.split('+').peekable();
-    let mut out = String::new();
-    while let Some(part) = parts.next() {
-        if parts.peek().is_none() {
-            out.push_str(&key_label(part));
-        } else {
-            out.push_str(&modifier_symbol(part));
-        }
-    }
-    out
-}
 
 /// Extra words one part of a chord should be findable by, so `"cmd"` finds `⌘`
 /// and `"down"` finds `↓`. Without this the search field could only match what
@@ -481,11 +418,17 @@ mod tests {
     /// The symbol a shortcut is painted with is untypeable, so the alias table is
     /// the only way to find `⌘T` by searching. Both spellings must land on
     /// exactly the Meta-bound rows.
+    ///
+    /// macOS-only, twice over: `⌘` is what `display_chord` paints `Meta` as only
+    /// here (elsewhere it is `Super+`), and `editor.save` is a Meta chord only
+    /// here (elsewhere it is `Ctrl+s`).
+    #[cfg(target_os = "macos")]
     #[test]
     fn filters_on_the_key_symbol_and_its_aliases() {
-        // Panels-context rows come first, in category order — quick search is
-        // declared before the terminal group, so ⌘F leads.
-        let expected = vec!["search.start", "terminal.focus", "terminal.toggle_half", "terminal.blur", "terminal.toggle_half"];
+        // Rows come in SECTIONS order — panels, search, viewer, editor, terminal
+        // — and within a section in category order, so ⌘F leads and the editor's
+        // ⌘S sits between the panels' terminal chords and the terminal's own.
+        let expected = vec!["search.start", "terminal.focus", "terminal.toggle_half", "editor.save", "terminal.blur", "terminal.toggle_half"];
         for query in ["⌘", "cmd"] {
             let found: Vec<String> = rows(&shortcuts(query)).into_iter().map(|(a, _)| a).collect();
             assert_eq!(found, expected, "{query:?} did not match the ⌘ rows exactly");
@@ -556,26 +499,5 @@ mod tests {
         let rows = rows(&body);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].1, vec!["F8", "Del"]);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn chords_render_the_way_the_fkey_bar_does() {
-        assert_eq!(display_chord("Meta+Shift+t"), "⌘⇧T");
-        assert_eq!(display_chord("Meta+t"), "⌘T");
-        assert_eq!(display_chord("Ctrl+h"), "⌃H");
-        assert_eq!(display_chord("Shift+F6"), "⇧F6");
-        assert_eq!(display_chord("Ctrl+Enter"), "⌃Enter");
-    }
-
-    #[test]
-    fn named_keys_render_as_symbols() {
-        assert_eq!(display_chord("ArrowDown"), "↓");
-        assert_eq!(display_chord("PageUp"), "PgUp");
-        assert_eq!(display_chord("Backspace"), "⌫");
-        assert_eq!(display_chord("Escape"), "Esc");
-        assert_eq!(display_chord(" "), "Space");
-        assert_eq!(display_chord("*"), "*");
-        assert_eq!(display_chord("F5"), "F5");
     }
 }
