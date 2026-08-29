@@ -80,6 +80,11 @@ export type {
   ShortcutSection,
   ShortcutGroup,
   ShortcutItem,
+  // Theming (§4)
+  Palette,
+  ThemeVar,
+  Appearance,
+  AppearanceMode,
   // In-app updates
   UpdateInfo,
 } from "./bindings";
@@ -251,6 +256,20 @@ export const help = {
    * way back.
    */
   openLink: (url: string) => unwrap(commands.openLink(url)),
+};
+
+/**
+ * Theming (§4). The core resolves the configured theme all the way down to
+ * paintable values — the base merge, the light/dark choice, and the fallback for
+ * an id that names nothing all happen there — so this is one call and the
+ * renderer holds no colour of its own.
+ */
+export const theme = {
+  /**
+   * The palette in force. Reads the config loaded by `init`, so call it after
+   * `nav.init()` or it resolves against defaults.
+   */
+  palette: () => unwrap(commands.getPalette()),
 };
 
 /**

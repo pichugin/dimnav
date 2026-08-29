@@ -1,6 +1,14 @@
-/* Terminal-flavored, calm defaults. Theming is config-driven in the core
-   (SPEC §4/§7); these CSS variables are the render-side surface a theme maps to.
-   Ships with a dark default and a light variant via prefers-color-scheme. */
+/* Terminal-flavored, calm defaults.
+
+   These values are the PRE-IPC BOOTSTRAP, not the theme. The core owns every
+   colour (SPEC §4/§7): `fm_core::theme::resolve` merges the configured theme,
+   picks the light or dark variant, and `applyPalette` writes the result onto
+   :root as inline custom properties, which outrank everything here.
+
+   They stay because the first frame paints before `get_palette` returns, and
+   without them it would be unstyled. They are a copy of the `classic` theme in
+   crates/fm-core/src/theme/themes/classic.toml — if you change a colour, change
+   it THERE; editing this file only alters what shows for one frame. */
 
 :root {
   --bg: #1e1e22;

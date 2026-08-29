@@ -910,6 +910,68 @@ impl Default for WatchPrefs {
     }
 }
 
+/// Which of a theme's two palettes is in force (§4).
+///
+/// A *resolved* fact, never a preference: by the time this reaches the frontend
+/// the core has already reconciled the user's [`AppearanceMode`] against what the
+/// OS reports and what the theme pins. The renderer sets CSS `color-scheme` from
+/// it so native scrollbars and form controls match, and makes no choice of its
+/// own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum Appearance {
+    Light,
+    Dark,
+}
+
+/// The user's standing preference about light and dark (§4/§7).
+///
+/// Separate from [`Appearance`] because "follow the OS" is not an appearance —
+/// it is a rule for picking one, and only the adapter can supply the fact it
+/// needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum AppearanceMode {
+    /// Follow the operating system. The default, and what the app did before
+    /// themes existed.
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+/// One resolved CSS custom property: `name` without the leading `--`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+pub struct ThemeVar {
+    pub name: String,
+    pub value: String,
+}
+
+/// A theme resolved down to paintable values (§4).
+///
+/// Everything is decided by the time this crosses the wire: the base merge, the
+/// light/dark choice, and the fallback for an id that names nothing. The renderer
+/// writes `vars` onto the root element and has no fallback of its own to apply,
+/// which is what keeps the frontend swappable (SPEC §3).
+///
+/// `vars` is an ordered list rather than a map or a struct of named fields. A
+/// struct would freeze the token set into the IPC contract, so every new colour
+/// would mean a DTO edit, a bindings regeneration and a frontend change; a map
+/// would lose the stable ordering that makes this cheap to assert on. The
+/// type-safety a struct would buy is worth nothing here, because the frontend
+/// never reads a token in TypeScript — it reads them in CSS as `var(--bg)`.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct Palette {
+    /// The theme actually in force, which is not always the one requested — an
+    /// unknown id falls back rather than failing.
+    pub id: String,
+    /// Human-readable name, for the About topic and a future picker.
+    pub name: String,
+    pub appearance: Appearance,
+    /// Sorted by `name`, so the payload is stable across runs.
+    pub vars: Vec<ThemeVar>,
+}
+
 /// Root config document (serialized to TOML). Ships with working defaults — the
 /// app is fully usable with zero configuration (§7).
 ///
@@ -924,8 +986,15 @@ impl Default for WatchPrefs {
 pub struct Config {
     /// Global "Move to Trash" default — OFF by default, persisted (§5.4a).
     pub trash_default: bool,
-    /// Id of the active theme.
+    /// Id of the active theme — a bundled id (`classic`, `dark-minimal`,
+    /// `light-minimal`) or the stem of a file in the `themes/` directory beside
+    /// this one. An id that names nothing falls back to the default rather than
+    /// failing (§4).
     pub theme: String,
+    /// Whether to follow the OS's light/dark setting or pin one. Only bites on a
+    /// theme that defines both variants; one that pins its own appearance wins,
+    /// since half its colours would otherwise be missing.
+    pub appearance: AppearanceMode,
     /// Largest file the embedded editor will load. Above this, F4 hands off to
     /// the external editor — the editor holds the whole document in memory,
     /// unlike the viewer, which pages.
@@ -948,6 +1017,7 @@ impl Default for Config {
         Self {
             trash_default: false,
             theme: "classic".to_string(),
+            appearance: AppearanceMode::System,
             edit_max_bytes: 16 << 20, // 16 MiB
             left_panel: PanelPrefs::default(),
             right_panel: PanelPrefs::default(),

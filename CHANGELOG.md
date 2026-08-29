@@ -8,6 +8,18 @@ All notable changes to dimnav are recorded here. The format follows
 
 ### Added
 
+- **Themes.** `Config.theme` had been persisted since the config slice while
+  nothing read it, and every colour was a literal in the stylesheet — the inverse
+  of the rule that theme values are config-driven. The core now resolves the
+  configured id into a palette the renderer simply paints. Three themes ship:
+  **Classic Commander** (what dimnav has always drawn, still the default), **Dark
+  Minimal** and **Light Minimal**. A theme may carry both a dark and a light
+  variant, in which case it follows the OS the way the stylesheet used to, or a
+  single pinned one. `appearance = "system" | "light" | "dark"` overrides the OS.
+  Your own theme goes in `themes/<id>.toml` beside `config.toml`, and a `base =`
+  line means it need only name the colours it actually changes. An unknown id, a
+  missing file or a malformed one falls back rather than leaving the app unpainted.
+
 - **Ctrl+=** shows the active panel's folder on the other panel, without moving
   the keyboard off the panel you pressed it from. It is inert while the terminal,
   viewer, editor or a dialog has focus.

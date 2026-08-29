@@ -27,6 +27,7 @@
 //! - [`plugin`]   — extension-point traits (Phase 1: definitions only, no loader).
 //! - [`view`]     — the embedded viewer/editor: type probe, paged sessions, docs (§5.5).
 //! - [`terminal`] — the embedded command line: scrollback, history, run status (§5.7).
+//! - [`theme`]    — colour values resolved from config into a paintable palette (§4).
 //! - [`state`]    — the two-panel app navigation state container.
 //! - [`types`]    — the serde + specta DTOs that form the IPC contract surface.
 
@@ -42,6 +43,7 @@ pub mod open;
 pub mod plugin;
 pub mod state;
 pub mod terminal;
+pub mod theme;
 pub mod types;
 pub mod view;
 

@@ -1,0 +1,33 @@
+# Light Minimal — the light counterpart to `dark-minimal`, same restraint.
+#
+# Pinned light for the mirror of that theme's reason: it defines no dark variant.
+
+name = "Light Minimal"
+appearance = "light"
+
+[light]
+bg = "#fcfcfb"
+bg-alt = "#f2f2f0"
+fg = "#2a2a30"
+fg-dim = "#6f6f78"
+border = "#e0e0dc"
+accent = "#3a6ea8"
+accent-fg = "#ffffff"
+accent-dim = "rgba(58, 110, 168, 0.28)"
+
+file-dir = "#3a6ea8"
+file-symlink = "#5c8bbd"
+file-hidden = "#85858d"
+file-doc = "#96634a"
+file-data = "#3f6b55"
+file-code = "#3a6ea8"
+file-archive = "#7a5b90"
+file-image = "#9c5570"
+file-media = "#3d7d76"
+file-exec = "#4a8355"
+file-selected = "#92702a"
+
+term-idle = "#85858d"
+term-run = "#96780f"
+term-ok = "#4a8355"
+term-err = "#a8443a"

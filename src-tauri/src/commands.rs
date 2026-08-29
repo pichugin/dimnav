@@ -15,9 +15,10 @@ use std::sync::{Arc, Mutex, PoisonError};
 use fm_core::open::{EmbeddedMode, OpenPlan};
 use fm_core::state::AppState;
 use fm_core::types::{
-    AppInfo, AppSnapshot, Config, DeleteRequest, DirListing, EditDoc, EntryKind, ErrorResolution,
+    Appearance, AppInfo, AppSnapshot, Config, DeleteRequest, DirListing, EditDoc, EntryKind,
+    ErrorResolution,
     GotoTarget, HelpBook, HistoryDir, KeyBinding, MediaKind, Motion, NavTarget, OpKind, OpenAction,
-    OpenOutcome, OpRequest, PanelId, Resolution, SaveOutcome, SearchDirection, SortMode,
+    OpenOutcome, OpRequest, Palette, PanelId, Resolution, SaveOutcome, SearchDirection, SortMode,
     TerminalBuffer, ViewMode, ViewMotion, ViewPage, ViewerMode,
 };
 use fm_core::view::{edit::Docs, Sessions};
@@ -122,6 +123,32 @@ pub fn ping() -> String {
 pub fn get_config(state: State<'_, SharedState>) -> Result<Config, String> {
     let s = state.lock().map_err(lock_err)?;
     Ok(s.config.clone())
+}
+
+/// Which appearance the OS is currently in.
+///
+/// The one fact `fm-core` structurally cannot read for itself, so the adapter
+/// supplies it — the same arrangement `get_help` uses for packaging metadata.
+/// A window that will not say defaults to dark, which is what this app has
+/// always painted before it knew.
+fn os_appearance(window: &tauri::Window) -> Appearance {
+    match window.theme() {
+        Ok(tauri::Theme::Light) => Appearance::Light,
+        _ => Appearance::Dark,
+    }
+}
+
+/// The theme in force, resolved to paintable values (§4).
+///
+/// Every decision — the base merge, the light/dark choice, the fallback for an id
+/// that names nothing — is made in the core. The renderer writes these onto the
+/// root element and applies no fallback of its own (SPEC §3).
+#[tauri::command]
+#[specta::specta]
+pub fn get_palette(state: State<'_, SharedState>, window: tauri::Window) -> Result<Palette, String> {
+    let os = os_appearance(&window);
+    let s = state.lock().map_err(lock_err)?;
+    Ok(fm_core::theme::resolve(&s.config, os))
 }
 
 /// The active keymap (action id → key chords), sourced from core config so the

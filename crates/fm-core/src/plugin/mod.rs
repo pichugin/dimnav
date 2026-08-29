@@ -62,9 +62,23 @@ pub trait Operation {
     fn id(&self) -> &str;
 }
 
-/// Contributes a theme (colors, fonts, transparency) (§6a / §7).
+/// Contributes a theme — the colour values a palette is resolved from (§6a / §7).
+///
+/// The bundled themes in [`crate::theme`] are written against this rather than
+/// being special-cased, for the same reason the About and Shortcuts topics are
+/// written against [`HelpTopic`]: the loader in Phase 5 then has nothing new to
+/// teach them. It also means a bundled theme and a hand-written one go through
+/// the same merge, so the merge is exercised by the default configuration
+/// instead of only by files CI never sees.
 pub trait ThemeProvider {
+    /// Stable identifier, e.g. `"dark-minimal"` — what `Config.theme` names.
     fn id(&self) -> &str;
+    /// Human-readable name, for the About topic and a future picker.
+    fn title(&self) -> &str;
+    /// This provider's theme, **unresolved**: the caller merges it over its
+    /// declared base and picks a light/dark variant, exactly as it does for a
+    /// user's file.
+    fn document(&self) -> &crate::theme::ThemeDoc;
 }
 
 /// Watches the directories the panels have open and reports when one changes

@@ -1,0 +1,35 @@
+# Dark Minimal — fewer hues, lower chroma, one accent. SPEC §4 asks for a default
+# that reads as calm rather than busy; this is that end of the range.
+#
+# Pinned dark: it defines no light variant, so following the OS into light would
+# leave grey-on-white. A user who wants light picks `light-minimal`.
+
+name = "Dark Minimal"
+appearance = "dark"
+
+[dark]
+bg = "#17171a"
+bg-alt = "#1e1e21"
+fg = "#cfcfd2"
+fg-dim = "#7c7c84"
+border = "#2b2b30"
+accent = "#5a8fc7"
+accent-fg = "#ffffff"
+accent-dim = "rgba(90, 143, 199, 0.32)"
+
+file-dir = "#8fb2d4"
+file-symlink = "#a9c6e0"
+file-hidden = "#6e6e76"
+file-doc = "#b39a86"
+file-data = "#7fa08c"
+file-code = "#5a8fc7"
+file-archive = "#a892b8"
+file-image = "#c095a8"
+file-media = "#86b3ad"
+file-exec = "#93b894"
+file-selected = "#d8bf6a"
+
+term-idle = "#7c7c84"
+term-run = "#c4a95e"
+term-ok = "#7fae83"
+term-err = "#c07f7f"

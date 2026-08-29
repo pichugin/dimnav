@@ -15,6 +15,14 @@ export const commands = {
 	/**  Return the configuration currently in effect (loaded from TOML at `init`, §7). */
 	getConfig: () => typedError<Config, string>(__TAURI_INVOKE("get_config")),
 	/**
+	 *  The theme in force, resolved to paintable values (§4).
+	 * 
+	 *  Every decision — the base merge, the light/dark choice, the fallback for an id
+	 *  that names nothing — is made in the core. The renderer writes these onto the
+	 *  root element and applies no fallback of its own (SPEC §3).
+	 */
+	getPalette: () => typedError<Palette, string>(__TAURI_INVOKE("get_palette")),
+	/**
 	 *  The active keymap (action id → key chords), sourced from core config so the
 	 *  webview never hardcodes keys (SPEC §6).
 	 */
@@ -408,6 +416,31 @@ export type AppSnapshot = {
 };
 
 /**
+ *  Which of a theme's two palettes is in force (§4).
+ * 
+ *  A *resolved* fact, never a preference: by the time this reaches the frontend
+ *  the core has already reconciled the user's [`AppearanceMode`] against what the
+ *  OS reports and what the theme pins. The renderer sets CSS `color-scheme` from
+ *  it so native scrollbars and form controls match, and makes no choice of its
+ *  own.
+ */
+export type Appearance = "light" | "dark";
+
+/**
+ *  The user's standing preference about light and dark (§4/§7).
+ * 
+ *  Separate from [`Appearance`] because "follow the OS" is not an appearance —
+ *  it is a rule for picking one, and only the adapter can supply the fact it
+ *  needs.
+ */
+export type AppearanceMode = 
+/**
+ *  Follow the operating system. The default, and what the app did before
+ *  themes existed.
+ */
+"system" | "light" | "dark";
+
+/**
  *  Payload for the collision-prompt event. `multiple` enables the `*_all`
  *  resolution choices in the dialog (§5.4a).
  */
@@ -431,8 +464,19 @@ export type CollisionPrompt = {
 export type Config = {
 	/**  Global "Move to Trash" default — OFF by default, persisted (§5.4a). */
 	trash_default?: boolean,
-	/**  Id of the active theme. */
+	/**
+	 *  Id of the active theme — a bundled id (`classic`, `dark-minimal`,
+	 *  `light-minimal`) or the stem of a file in the `themes/` directory beside
+	 *  this one. An id that names nothing falls back to the default rather than
+	 *  failing (§4).
+	 */
 	theme?: string,
+	/**
+	 *  Whether to follow the OS's light/dark setting or pin one. Only bites on a
+	 *  theme that defines both variants; one that pins its own appearance wins,
+	 *  since half its colours would otherwise be missing.
+	 */
+	appearance?: AppearanceMode,
 	/**
 	 *  Largest file the embedded editor will load. Above this, F4 hands off to
 	 *  the external editor — the editor holds the whole document in memory,
@@ -760,6 +804,34 @@ export type OpenOutcome =
 { kind: "executing" } | 
 /**  Nothing to open (`..`, a directory, or an empty panel). */
 { kind: "nothing" } | { kind: "viewer"; value: ViewPage } | { kind: "editor"; value: EditDoc };
+
+/**
+ *  A theme resolved down to paintable values (§4).
+ * 
+ *  Everything is decided by the time this crosses the wire: the base merge, the
+ *  light/dark choice, and the fallback for an id that names nothing. The renderer
+ *  writes `vars` onto the root element and has no fallback of its own to apply,
+ *  which is what keeps the frontend swappable (SPEC §3).
+ * 
+ *  `vars` is an ordered list rather than a map or a struct of named fields. A
+ *  struct would freeze the token set into the IPC contract, so every new colour
+ *  would mean a DTO edit, a bindings regeneration and a frontend change; a map
+ *  would lose the stable ordering that makes this cheap to assert on. The
+ *  type-safety a struct would buy is worth nothing here, because the frontend
+ *  never reads a token in TypeScript — it reads them in CSS as `var(--bg)`.
+ */
+export type Palette = {
+	/**
+	 *  The theme actually in force, which is not always the one requested — an
+	 *  unknown id falls back rather than failing.
+	 */
+	id: string,
+	/**  Human-readable name, for the About topic and a future picker. */
+	name: string,
+	appearance: Appearance,
+	/**  Sorted by `name`, so the payload is stable across runs. */
+	vars: ThemeVar[],
+};
 
 /**
  *  Payload for a panel-state change pushed by the core, e.g. the directory
@@ -1103,6 +1175,12 @@ export type TerminalStatus =
 export type TextEncoding = "utf8" | 
 /**  UTF-8 with a byte-order mark, which must be preserved on save. */
 "utf8_bom" | "utf16_le" | "utf16_be" | "latin1";
+
+/**  One resolved CSS custom property: `name` without the leading `--`. */
+export type ThemeVar = {
+	name: string,
+	value: string,
+};
 
 /**  A newer release than the one running, as advertised by the update feed. */
 export type UpdateInfo = {

@@ -319,6 +319,44 @@ Known limits:
 
 ---
 
+### Theming (§4)
+
+- [x] **Colour values are config-driven, not hardcoded.** `Config.theme` had been
+      written and persisted since the config slice while nothing read it, and every
+      colour lived as a literal in `app.css` — the exact inverse of the CLAUDE.md
+      rule. `fm_core::theme::resolve` now turns the configured id into a `Palette`
+      of ready-to-paint CSS custom properties
+- [x] Three bundled themes: **Classic Commander** (the palette dimnav has always
+      drawn, and still the default), **Dark Minimal** and **Light Minimal** — fewer
+      hues, lower chroma, one accent
+- [x] A theme carries **up to two variants**, dark and light. One that defines both
+      follows the OS, which is what the stylesheet's `prefers-color-scheme` block
+      used to do on its own; one that defines a single variant **pins** it, because
+      following the OS into the other would paint half a palette
+- [x] `appearance = "system" | "light" | "dark"` in `config.toml` overrides the OS
+      for a two-variant theme. A pinned theme still wins, for the same reason
+- [x] **User themes** live in `themes/<id>.toml` beside `config.toml`. A `base = ` line
+      merges over a bundled theme, so a personal theme is a name, a base and the
+      three colours actually being changed
+- [x] Nothing about a hand-typed theme can stop the app painting: an unknown id, a
+      missing file, a malformed one, and a variant the theme does not define all
+      fall back rather than failing (§7)
+- [x] **Bundled themes go through the `ThemeProvider` extension point** (§6a) rather
+      than being special-cased, joining `HelpTopic`, `FsObserver` and
+      `ExecutionSink`. They are parsed from embedded TOML by the same deserializer a
+      user's file uses, so the merge path is exercised by the default configuration
+      instead of only by files CI never sees
+- [x] The core owns the light/dark decision, not a CSS media query — it is a
+      three-way choice (`system`/`light`/`dark`), and a future Iced frontend has no
+      `prefers-color-scheme` to consult. `app.css` keeps its values purely as the
+      **pre-IPC bootstrap** so the first frame is not unstyled; inline properties on
+      `:root` outrank them
+- [x] A test maps every `EntryCategory` to a token and asserts every bundled theme
+      defines it, so a new category or a dropped colour fails in CI rather than
+      rendering an invisible row
+
+---
+
 ### Configuration (§7)
 
 - [x] **A broken line in `config.toml` costs that line, not the file.** `toml::from_str`
@@ -395,7 +433,14 @@ user table to hang off, and building one is its own slice (§7).
 
 ### Elsewhere (from SPEC §8)
 
-- [ ] Theming and transparency, config-driven (§4)
+- [ ] **Window transparency** (§4) — the palette landed; opacity needs
+      `macosPrivateApi` + a transparent window before a translucent `--bg` means
+      anything
+- [ ] Configurable **fonts** and row height (§4) — the theme file is the place for
+      them; nothing reads a font token yet
+- [ ] A theme **picker** in the UI — themes are chosen by editing `config.toml`
+      today, which is the app's configuration story (§7) but not the friendliest
+      one
 - [ ] Keybinding remapping and conflict detection (§6) — including the terminal
       bindings added in this slice. `get_keymap` and the F1 help screen both read
       `default_keymap()` today, so help already renders whatever the keymap says;

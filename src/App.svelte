@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { nav, ops, open, viewer, editor, terminal, help, updates, events } from "./lib/ipc";
+  import { nav, ops, open, viewer, editor, terminal, help, theme, updates, events } from "./lib/ipc";
   import type {
     AppSnapshot,
     EditDoc,
@@ -14,6 +14,7 @@
     Motion,
     OpKind,
     OpenOutcome,
+    Palette,
     PanelId,
     PanelState,
     Resolution,
@@ -255,6 +256,17 @@
     exec: "c-exec",
     plain: "",
   };
+
+  // Paint a resolved palette onto the root element (§4). Inline properties
+  // outrank the `:root` rule and its `prefers-color-scheme` variant in app.css,
+  // which stay behind as the pre-IPC bootstrap so the first frame is not
+  // unstyled. Every value — and the light/dark choice — was decided core-side;
+  // this only writes them down, which is what keeps the renderer swappable.
+  function applyPalette(p: Palette) {
+    const root = document.documentElement;
+    for (const v of p.vars) root.style.setProperty(`--${v.name}`, v.value);
+    root.style.colorScheme = p.appearance;
+  }
 
   function entryClass(e: Entry): string {
     return CLASS_OF[e.category];
@@ -1438,6 +1450,9 @@
         keymaps = buildKeymap(keymap);
         hints = buildHints(keymap);
         snapshot = await nav.init();
+        // After `init`, never before: the palette resolves from the config that
+        // `init` loads, so an earlier call would paint the default theme.
+        applyPalette(await theme.palette());
 
         // Fire-and-forget: the panels must not wait on a network round trip to
         // paint. The backend already swallows offline and not-yet-published

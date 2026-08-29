@@ -23,6 +23,7 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::ping,
             commands::list_dir,
             commands::get_config,
+            commands::get_palette,
             commands::get_keymap,
             commands::get_help,
             commands::open_link,
