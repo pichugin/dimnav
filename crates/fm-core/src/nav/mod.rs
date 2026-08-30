@@ -128,6 +128,9 @@ pub fn set_geometry(state: &mut PanelState, columns: u16, rows: u16) {
 pub fn set_listing(state: &mut PanelState, listing: DirListing) {
     state.path = listing.path;
     state.entries = listing.entries;
+    // Re-derived by every listing rather than cleared by hand: it describes the
+    // directory as it reads right now (§5.6).
+    state.access = listing.access;
     crate::fs::sort_entries(&mut state.entries, state.sort_mode);
     state.cursor_index = 0;
     state.top_index = 0;
@@ -204,6 +207,9 @@ pub fn resort(state: &mut PanelState) {
     let listing = DirListing {
         path: state.path.clone(),
         entries: state.entries.clone(),
+        // No I/O happened, so nothing has disproved a denial: carry it through or
+        // a sort change would silently clear the state (§5.6).
+        access: state.access.clone(),
     };
     set_listing_preserving(state, listing);
 }
@@ -591,6 +597,7 @@ mod tests {
             DirListing {
                 path: "/dir".into(),
                 entries,
+                access: None,
             },
         );
         assert_eq!((p.cursor_index, p.top_index), (0, 0));
@@ -613,6 +620,7 @@ mod tests {
                 ent("child", EntryKind::Dir),
                 ent("zeta.txt", EntryKind::File),
             ],
+            access: None,
         };
         set_listing(&mut p, listing);
         assert_eq!(p.cursor_index, 0); // reset to '..'
@@ -797,9 +805,47 @@ mod tests {
                     .iter()
                     .map(|n| ent(n, EntryKind::File))
                     .collect(),
+                access: None,
             },
         );
         p
+    }
+
+    #[test]
+    fn the_access_state_follows_the_listing_and_survives_a_resort() {
+        use crate::types::{DirAccessError, DirAccessKind};
+
+        let mut p = named_panel(&["a.txt", "b.txt"]);
+        let denied = DirAccessError {
+            kind: DirAccessKind::Denied,
+            message: "nope".to_string(),
+            remedies: Vec::new(),
+        };
+        set_listing(
+            &mut p,
+            DirListing {
+                path: "/locked".into(),
+                entries: vec![ent("..", EntryKind::Dir)],
+                access: Some(denied),
+            },
+        );
+        assert_eq!(p.access.as_ref().map(|a| a.kind), Some(DirAccessKind::Denied));
+
+        // Sorting does no I/O, so nothing has disproved the denial.
+        p.sort_mode = crate::types::SortMode::Size;
+        resort(&mut p);
+        assert_eq!(p.access.as_ref().map(|a| a.kind), Some(DirAccessKind::Denied));
+
+        // A listing that succeeded clears it without anyone having to remember.
+        set_listing(
+            &mut p,
+            DirListing {
+                path: "/locked".into(),
+                entries: vec![ent("..", EntryKind::Dir), ent("a.txt", EntryKind::File)],
+                access: None,
+            },
+        );
+        assert!(p.access.is_none());
     }
 
     #[test]
@@ -839,6 +885,7 @@ mod tests {
                     ent("a.txt", EntryKind::File),
                     ent("d.txt", EntryKind::File),
                 ],
+                access: None,
             },
         );
 
@@ -865,6 +912,7 @@ mod tests {
                     ent("c.txt", EntryKind::File),
                     ent("d.txt", EntryKind::File),
                 ],
+                access: None,
             },
         );
 
@@ -886,6 +934,7 @@ mod tests {
                     ent("a.txt", EntryKind::File),
                     ent("b.txt", EntryKind::File),
                 ],
+                access: None,
             },
         );
 
@@ -908,6 +957,7 @@ mod tests {
         let same = DirListing {
             path: p.path.clone(),
             entries: p.entries.clone(),
+            access: None,
         };
         set_listing_preserving(&mut p, same);
 
@@ -977,6 +1027,7 @@ mod tests {
         let same = DirListing {
             path: p.path.clone(),
             entries: p.entries.clone(),
+            access: None,
         };
         set_listing_preserving(&mut p, same);
         assert_eq!(p.selection, vec![1]); // the real entry, never `..` at index 0

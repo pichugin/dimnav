@@ -53,6 +53,8 @@ themselves when the port begins.
 | `crates/fm-core/src/ops/mod.rs:811` | ⚠ `copy_symlink` copies the **resolved contents** instead of the link |
 | `crates/fm-core/src/fs/mod.rs:52`, `:253`–`:300` | Owner/group → `None`; uid/gid/nlink/mode → `0`; ⚠ `is_executable` → `false`, which would break the colour and execute classifier outright |
 | `src-tauri/src/commands.rs:1562` | `launch` → `Err`; opening files unsupported |
+| `src-tauri/src/commands.rs` `open_privacy_settings` | → `Err`. Windows has no equivalent and the Linux answer is desktop-specific; the core simply never offers the remedy off macOS |
+| `crates/fm-core/src/fs/mod.rs` `is_policy_denial` | → `false`, so every denial classifies as `Denied` rather than `Restricted`. Correct until a platform gains its own policy layer |
 | `src-tauri/src/ops_runtime.rs:196`, `:228` | `elevate`, `elevate_delete` → `Err` |
 | `src-tauri/src/terminal_runtime.rs:247` | No process group to signal; killing the child is the approximation |
 | `src-tauri/src/watch_runtime.rs:614` | ⚠ `is_local_volume` → unconditionally `true` (Linux wants `statfs.f_type`, Windows `GetDriveType`) |
@@ -69,11 +71,6 @@ terminal). **Not implemented: `Command` — whose `run()` is commented out at
 
 ### Known defects
 
-- **Access denied is not a first-class listing state.** `fs/mod.rs:80` is
-  `if let Ok(read) = fs::read_dir(p)`, so a TCC-denied directory renders as an empty
-  listing with no error at all. Per-*child* denial is handled (`EntryMarker::Denied`); the
-  directory itself is not, and `DirListing` has no field to say so. SPEC §3 and §5.6 both
-  ask for better.
 - **`ConfigChangedEvent` is declared** (`src-tauri/src/events.rs:51`) **and emitted by
   nothing.**
 - **`OpProgress.bytes_done` / `bytes_total` are always `0`** (`ops_runtime.rs:100`), cross
@@ -266,6 +263,60 @@ so it could only colour by exit code. The consequences:
   buffering asymmetry, not a threading bug: stdout is block-buffered when it is
   not a TTY, so it arrives in bursts, while stderr is unbuffered and arrives
   immediately. A PTY would fix it, at the cost of the stderr-based indicator
+
+---
+
+### Access, permissions & error handling (§5.6)
+
+- [x] **A directory the app cannot read says so**, instead of painting as an empty
+      folder. `list_dir` used to drop the `read_dir` error on the floor, so a
+      TCC-protected `~/Desktop`, a `0700` folder belonging to someone else and a
+      directory that had just been deleted were all indistinguishable from an
+      empty one — and from each other
+- [x] **`EPERM` is told apart from `EACCES`**, which `io::ErrorKind::PermissionDenied`
+      flattens together. On macOS the first is TCC and is fixed by a privacy
+      grant; the second is the permission bits and is fixed by a mode or owner
+      change. Offering the wrong remedy sends the user somewhere that cannot help
+- [x] Where the fix is a TCC grant, a button opens **Full Disk Access** — macOS
+      will not re-prompt once the user has refused, so the deep link is the only
+      remaining route. Full Disk Access rather than the per-category Files and
+      Folders pane, which lists only apps that have already triggered a prompt and
+      so is a dead end for one that was denied or never asked
+- [x] The remedy goes through its **own command with no URL parameter**.
+      `open_link` is hard-restricted to `http(s)` because the opener plugin will
+      launch `file://` and custom schemes — a local-file-execution primitive — and
+      widening it for this would have undone that
+- [x] The retry chord is read from the **live keymap**, like the F-key bars and the
+      F1 book, so a rebind moves it (§6)
+- [x] `..` is still listed, so a panel that lands in an unreadable folder is never
+      a dead end the keyboard cannot leave
+- [x] **The watcher can finally report it.** "Became unreadable" was in the §5.6
+      fate table and unreachable in practice: the watcher recognises a directory by
+      holding an `O_EVTONLY` descriptor on it, and an unreadable directory is
+      exactly one it cannot open — so the fate was forced to `Alive` and the
+      `Denied` notice never fired. The state now comes from the listing, which
+      needs no descriptor
+- [x] The listing digest hashes the access state, so a directory flipping to
+      unreadable is not dropped as "nothing visibly changed" — its entry list is
+      empty either way
+- [x] The block **replaces** the panel notice rather than doubling it: both would
+      be saying the directory cannot be read
+- [x] **A directory the panel cannot read is not remembered as its start
+      directory**, so the next launch does not reopen in a dead end (§7). Guarded
+      in `capture_prefs`, the one place live panel state flows back into the config
+- [x] Painted in the palette's error colour, not as a red slab: the saturated
+      red-background dialog stays reserved for operations that actually failed
+      (§5.4b)
+
+Known limits:
+
+- Where the fix is **elevation** rather than a grant, nothing is offered. Copy,
+  move and delete escalate through the OS authorization prompt (§5.4a), but
+  listing a directory as root would mean shelling out and parsing output
+- Per-*child* denial still discards the errno: an unreadable row is
+  `EntryMarker::Denied` whatever refused it
+- `dir_size` skips subdirectories it cannot read, so a recursive folder size
+  computed across a denied subtree is silently short
 
 ---
 

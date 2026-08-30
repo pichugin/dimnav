@@ -32,6 +32,9 @@ export type {
   PanelPrefs,
   Config,
   DirListing,
+  DirAccessError,
+  DirAccessKind,
+  AccessRemedy,
   Entry,
   EntryCategory,
   EntryKind,
@@ -139,6 +142,13 @@ export const nav = {
   /** Ctrl+= — push the active panel's folder onto the other panel (§5.1). */
   equalizePanels: () => unwrap(commands.equalizePanels()),
   refresh: (panel: PanelId) => unwrap(commands.refresh(panel)),
+  /**
+   * Hand the user to the OS privacy settings, so a directory the app is not
+   * allowed to read can be granted (§5.6). Offered only when a panel's
+   * `access.remedies` says so — the core decides whether a privacy grant is the
+   * right remedy, and it is not one on every platform.
+   */
+  openPrivacySettings: () => unwrap(commands.openPrivacySettings()),
   // Quick search (§5.9). The core owns the query and decides whether a typed
   // character is accepted or rejected — `search.miss_rev` on the returned panel
   // increments on a reject, which is what the beep watches.

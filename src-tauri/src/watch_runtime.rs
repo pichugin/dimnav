@@ -577,6 +577,9 @@ impl Service {
 fn digest_of(listing: &DirListing) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     listing.path.hash(&mut h);
+    // A directory flipping to unreadable keeps an empty entry list, so without
+    // this the change hashes identically and the panel never hears about it.
+    listing.access.as_ref().map(|a| a.kind).hash(&mut h);
     listing.entries.len().hash(&mut h);
     for e in &listing.entries {
         e.name.hash(&mut h);
@@ -655,6 +658,7 @@ mod tests {
         DirListing {
             path: "/dir".to_string(),
             entries,
+            access: None,
         }
     }
 
@@ -677,6 +681,18 @@ mod tests {
         let mut touched = listing(vec![entry("a", 1), entry("b", 2)]);
         touched.entries[0].modified = 999;
         assert_ne!(digest_of(&base), digest_of(&touched));
+
+        // A directory turning unreadable keeps an empty entry list, so without
+        // the access state in the digest the change would hash identically to an
+        // empty directory and never reach the panel (§5.6).
+        let empty = listing(vec![]);
+        let mut denied = listing(vec![]);
+        denied.access = Some(fm_core::types::DirAccessError {
+            kind: fm_core::types::DirAccessKind::Denied,
+            message: "nope".to_string(),
+            remedies: Vec::new(),
+        });
+        assert_ne!(digest_of(&empty), digest_of(&denied));
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub fn make_builder() -> Builder<tauri::Wry> {
             commands::set_setting,
             commands::reset_setting,
             commands::open_link,
+            commands::open_privacy_settings,
             commands::check_update,
             commands::install_update,
             commands::init,

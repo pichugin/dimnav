@@ -74,6 +74,24 @@ All notable changes to dimnav are recorded here. The format follows
 
 ### Fixed
 
+- **A folder the app cannot read no longer looks like an empty folder.** Reading
+  a directory swallowed its error, so a TCC-protected `~/Desktop`, a `0700`
+  folder belonging to someone else, or a directory deleted out from under the
+  panel all painted the same way: a panel with `..` in it and nothing else, no
+  message, no hint that anything had gone wrong. The panel now says which of
+  those happened and what to do about it, with `..` still there so the keyboard
+  can leave. macOS blocking access is told apart from the permission bits — they
+  have different fixes — and where the fix is a privacy grant, a button opens
+  Full Disk Access, since macOS will not ask a second time once it has been
+  refused. Granting access and pressing refresh fills the panel in.
+
+  Two consequences worth knowing. A directory that turns unreadable while a panel
+  is sitting in it now reports itself, which the watcher could never do before:
+  it recognises the state by holding a descriptor on the folder, and an
+  unreadable folder is precisely one it cannot hold a descriptor on. And a folder
+  the panel cannot read is no longer remembered as its start directory, so the
+  next launch does not reopen in a dead end.
+
 - **A broken line in `config.toml` no longer costs the whole file.** TOML
   deserialization fails the entire document on one wrong value, so a hand-edited
   `trash_default = yes` used to take the panel directories, the file associations

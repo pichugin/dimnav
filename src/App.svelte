@@ -56,6 +56,7 @@
       geometry: { columns: 0, rows_per_column: 0 },
       search: null,
       notice: null,
+      access: null,
     };
   }
 
@@ -1305,6 +1306,21 @@
   }
 
   /**
+   * Hand the user to the OS privacy settings so they can grant access to a
+   * folder the app cannot read (§5.6). Offered only when the core says so —
+   * whether a privacy grant is even the right remedy is its decision, not this
+   * one's. A failure degrades to a warning for the same reason an About link
+   * does: the user pressed a button, they did not start an operation.
+   */
+  async function openPrivacySettings() {
+    try {
+      await nav.openPrivacySettings();
+    } catch (e) {
+      console.warn("could not open privacy settings:", e);
+    }
+  }
+
+  /**
    * Install the pending update and relaunch. The button is replaced by a status
    * line for the duration: the download can take a while, and a second press
    * would start a second download.
@@ -1871,12 +1887,33 @@
           </div>
         {/if}
 
+        <!-- The directory itself could not be read (§5.6). A first-class state
+             rather than an empty panel: the sentence and the remedies are core
+             decisions, so this only lays them out. `..` is still listed above,
+             so the panel is never a dead end the keyboard cannot leave. -->
+        {#if p.access}
+          <div class="panel-access" role="presentation" onclick={(e) => e.stopPropagation()}>
+            <p class="msg">⚠ {p.access.message}</p>
+            {#if p.access.remedies.includes("retry")}
+              <p class="hint">{hint("panels", "panel.refresh")} to retry</p>
+            {/if}
+            {#if p.access.remedies.includes("privacy_settings")}
+              <button class="ctl" onclick={() => void openPrivacySettings()}>
+                Open Privacy Settings…
+              </button>
+            {/if}
+          </div>
+        {/if}
+
         <!-- Something happened to this directory without the user asking (§5.6):
              it was moved, deleted, replaced, or became unreadable. Non-modal by
              design — a background process renaming a folder is not a failure, and
              the red dialog is reserved for operations that failed. The sentence
-             comes from the core; this only decides where it sits. -->
-        {#if p.notice}
+             comes from the core; this only decides where it sits.
+
+             Suppressed while the block above is showing: both would be saying
+             the directory cannot be read, and the block says it better. -->
+        {#if p.notice && !(p.access && p.notice.kind === "denied")}
           <div
             class="panel-notice"
             class:bad={p.notice.kind === "denied"}
@@ -2346,6 +2383,35 @@
   }
   .panel-notice.bad {
     color: var(--term-err);
+  }
+  /* The directory itself is unreadable (§5.6). Fills what would otherwise be an
+     empty listing, so the state is unmissable — but painted in the palette's
+     error colour rather than as a red slab: the saturated red background stays
+     reserved for the modal dialog that reports a failed operation (§5.4b). */
+  .panel-access {
+    /* Shares the panel body with the listing, which keeps its own `flex: 1` —
+       the grid reserves every row it was measured for, so collapsing it would
+       push the panel past its own height. */
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 16px;
+    text-align: center;
+    color: var(--term-err);
+  }
+  .panel-access .msg {
+    margin: 0;
+    max-width: 42ch;
+  }
+  .panel-access .hint {
+    margin: 0;
+    color: var(--fg-dim);
+    font-size: 0.9em;
   }
   .path {
     flex: 1;

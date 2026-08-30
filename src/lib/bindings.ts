@@ -70,6 +70,21 @@ export const commands = {
 	 */
 	openLink: (url: string) => typedError<null, string>(__TAURI_INVOKE("open_link", { url })),
 	/**
+	 *  Open the OS privacy settings so the user can grant access to a folder the app
+	 *  is not allowed to read (§5.6).
+	 * 
+	 *  Takes no URL. Widening [`open_link`] to custom schemes is exactly what its
+	 *  scheme check exists to prevent, so the one destination this needs is compiled
+	 *  in rather than passed across the boundary.
+	 * 
+	 *  Full Disk Access rather than the per-category Files and Folders pane: macOS
+	 *  will not re-prompt once the user has decided, and the per-category pane only
+	 *  lists apps that have already triggered a prompt — so for an app that was
+	 *  denied, or never asked, it is a dead end. Full Disk Access always offers the
+	 *  add-an-app control.
+	 */
+	openPrivacySettings: () => typedError<null, string>(__TAURI_INVOKE("open_privacy_settings")),
+	/**
 	 *  Ask the update feed whether a newer release exists (§ release process).
 	 * 
 	 *  `Ok(None)` means "up to date" *and* "could not tell" — the two are
@@ -391,6 +406,17 @@ export type AboutBody = {
 };
 
 /**
+ *  Something the user can do about a directory they cannot read (§5.6). The core
+ *  decides which apply, so the renderer paints buttons without knowing what a
+ *  TCC grant is.
+ */
+export type AccessRemedy = 
+/**  Re-read the directory — bound to the panel's refresh action. */
+"retry" | 
+/**  Open the OS privacy settings so access can be granted. */
+"privacy_settings";
+
+/**
  *  Who this app is, for the About topic. Filled in by the platform adapter from
  *  its packaging metadata (Cargo / the Tauri bundle config), because the core
  *  has no packaging of its own to read.
@@ -530,12 +556,59 @@ export type Config = {
 export type ConfigChangedEvent = null;
 
 /**
+ *  Why a listing is empty when it should not be (§5.6). Present only on the
+ *  failure path: an ordinary directory — including a genuinely empty one —
+ *  carries `None`.
+ * 
+ *  This is the *directory itself* being unreadable. An unreadable **child** is
+ *  still a row carrying [`EntryMarker::Denied`], which is a different thing and
+ *  must not abort the listing.
+ */
+export type DirAccessError = {
+	kind: DirAccessKind,
+	/**
+	 *  Ready-to-render sentence, composed by the core. Deliberately excludes the
+	 *  path: this renders directly under the panel header, which already shows it.
+	 */
+	message: string,
+	/**  What to offer, in the order it should be offered. */
+	remedies: AccessRemedy[],
+};
+
+/**
+ *  Why a directory could not be listed (§5.6). Drives which remedy is offered
+ *  and how the state reads; the sentence itself comes from
+ *  [`DirAccessError::message`], composed core-side for the same reason
+ *  [`PanelNotice::message`] is.
+ */
+export type DirAccessKind = 
+/**
+ *  macOS TCC refused the read (`EPERM`). The fix is a privacy grant, not a
+ *  mode change, and macOS will not re-prompt once the user has decided.
+ */
+"restricted" | 
+/**
+ *  The permission bits refused the read (`EACCES`). Off macOS every denial
+ *  lands here, since `EPERM` carries no TCC meaning there.
+ */
+"denied" | 
+/**  Nothing is at the path any more. */
+"missing" | 
+/**  Anything else `read_dir` can fail with — reported rather than guessed at. */
+"failed";
+
+/**
  *  Result of reading a directory. Unreadable entries appear in `entries` carrying
  *  a non-`Ok` [`EntryMarker`] rather than aborting the listing (§5.6).
  */
 export type DirListing = {
 	path: string,
 	entries: Entry[],
+	/**
+	 *  Why the directory could not be read, when it could not (§5.6). `None` on
+	 *  the ordinary path, including for a directory that is simply empty.
+	 */
+	access: DirAccessError | null,
 };
 
 /**
@@ -1008,6 +1081,12 @@ export type PanelState = {
 	 *  react (§5.6). Transient: cleared by the next deliberate navigation.
 	 */
 	notice: PanelNotice | null,
+	/**
+	 *  Why this directory could not be read, when it could not (§5.6). Unlike
+	 *  `notice` it describes a *current* condition, so it is re-derived by every
+	 *  listing rather than cleared by hand.
+	 */
+	access: DirAccessError | null,
 };
 
 /**

@@ -348,6 +348,40 @@ pub fn open_link(app: AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("could not open link: {e}"))
 }
 
+/// Open the OS privacy settings so the user can grant access to a folder the app
+/// is not allowed to read (§5.6).
+///
+/// Takes no URL. Widening [`open_link`] to custom schemes is exactly what its
+/// scheme check exists to prevent, so the one destination this needs is compiled
+/// in rather than passed across the boundary.
+///
+/// Full Disk Access rather than the per-category Files and Folders pane: macOS
+/// will not re-prompt once the user has decided, and the per-category pane only
+/// lists apps that have already triggered a prompt — so for an app that was
+/// denied, or never asked, it is a dead end. Full Disk Access always offers the
+/// add-an-app control.
+#[tauri::command]
+#[specta::specta]
+pub fn open_privacy_settings(app: AppHandle) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        tauri_plugin_opener::OpenerExt::opener(&app)
+            .open_url(
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
+                None::<&str>,
+            )
+            .map_err(|e| format!("could not open Privacy & Security: {e}"))
+    }
+    // Phase 4: Windows has no equivalent, and the Linux answer depends on the
+    // desktop environment. The remedy is simply not offered off macOS — the core
+    // never emits `AccessRemedy::PrivacySettings` there.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        Err("privacy settings are only available on macOS".to_string())
+    }
+}
+
 /// List a directory into a structured [`DirListing`] (utility; panels use the
 /// stateful commands below).
 #[tauri::command]

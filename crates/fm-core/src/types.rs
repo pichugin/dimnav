@@ -202,6 +202,54 @@ pub struct PanelNotice {
     pub path: String,
 }
 
+/// Why a directory could not be listed (§5.6). Drives which remedy is offered
+/// and how the state reads; the sentence itself comes from
+/// [`DirAccessError::message`], composed core-side for the same reason
+/// [`PanelNotice::message`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum DirAccessKind {
+    /// macOS TCC refused the read (`EPERM`). The fix is a privacy grant, not a
+    /// mode change, and macOS will not re-prompt once the user has decided.
+    Restricted,
+    /// The permission bits refused the read (`EACCES`). Off macOS every denial
+    /// lands here, since `EPERM` carries no TCC meaning there.
+    Denied,
+    /// Nothing is at the path any more.
+    Missing,
+    /// Anything else `read_dir` can fail with — reported rather than guessed at.
+    Failed,
+}
+
+/// Something the user can do about a directory they cannot read (§5.6). The core
+/// decides which apply, so the renderer paints buttons without knowing what a
+/// TCC grant is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessRemedy {
+    /// Re-read the directory — bound to the panel's refresh action.
+    Retry,
+    /// Open the OS privacy settings so access can be granted.
+    PrivacySettings,
+}
+
+/// Why a listing is empty when it should not be (§5.6). Present only on the
+/// failure path: an ordinary directory — including a genuinely empty one —
+/// carries `None`.
+///
+/// This is the *directory itself* being unreadable. An unreadable **child** is
+/// still a row carrying [`EntryMarker::Denied`], which is a different thing and
+/// must not abort the listing.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct DirAccessError {
+    pub kind: DirAccessKind,
+    /// Ready-to-render sentence, composed by the core. Deliberately excludes the
+    /// path: this renders directly under the panel header, which already shows it.
+    pub message: String,
+    /// What to offer, in the order it should be offered.
+    pub remedies: Vec<AccessRemedy>,
+}
+
 /// The full state of one panel — the unit the frontend renders.
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct PanelState {
@@ -225,6 +273,10 @@ pub struct PanelState {
     /// Set when the directory changed underneath the panel and the core had to
     /// react (§5.6). Transient: cleared by the next deliberate navigation.
     pub notice: Option<PanelNotice>,
+    /// Why this directory could not be read, when it could not (§5.6). Unlike
+    /// `notice` it describes a *current* condition, so it is re-derived by every
+    /// listing rather than cleared by hand.
+    pub access: Option<DirAccessError>,
 }
 
 impl Default for PanelState {
@@ -242,6 +294,7 @@ impl Default for PanelState {
             geometry: PanelGeometry::default(),
             search: None,
             notice: None,
+            access: None,
         }
     }
 }
@@ -252,6 +305,9 @@ impl Default for PanelState {
 pub struct DirListing {
     pub path: String,
     pub entries: Vec<Entry>,
+    /// Why the directory could not be read, when it could not (§5.6). `None` on
+    /// the ordinary path, including for a directory that is simply empty.
+    pub access: Option<DirAccessError>,
 }
 
 /// A full snapshot of navigation state — both panels plus which is active. Every

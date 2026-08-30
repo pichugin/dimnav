@@ -197,8 +197,53 @@ fn capture_prefs(panel: &PanelState, prefs: &mut PanelPrefs) {
     prefs.view_mode = panel.view_mode;
     prefs.sort_mode = panel.sort_mode;
     prefs.show_hidden = panel.show_hidden;
-    // Remember where the panel was left, so the next launch reopens it (§7).
-    if !panel.path.is_empty() {
+    // Remember where the panel was left, so the next launch reopens it (§7) —
+    // unless the panel cannot read it. Persisting a directory that renders as a
+    // permission error would reopen the app in a dead end (§5.6).
+    if !panel.path.is_empty() && panel.access.is_none() {
         prefs.start_dir = Some(panel.path.clone());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{DirAccessError, DirAccessKind};
+
+    fn denied() -> DirAccessError {
+        DirAccessError {
+            kind: DirAccessKind::Denied,
+            message: "nope".to_string(),
+            remedies: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_readable_directory_is_remembered_for_the_next_launch() {
+        let panel = PanelState {
+            path: "/tmp/somewhere".to_string(),
+            ..PanelState::default()
+        };
+        let mut prefs = PanelPrefs::default();
+        capture_prefs(&panel, &mut prefs);
+        assert_eq!(prefs.start_dir.as_deref(), Some("/tmp/somewhere"));
+    }
+
+    #[test]
+    fn a_directory_the_panel_cannot_read_is_not_remembered() {
+        // Otherwise the next launch reopens in the dead end (§5.6 / §7). The
+        // previously remembered directory is left in place rather than cleared:
+        // it is still the last place the panel could actually show.
+        let panel = PanelState {
+            path: "/tmp/locked".to_string(),
+            access: Some(denied()),
+            ..PanelState::default()
+        };
+        let mut prefs = PanelPrefs {
+            start_dir: Some("/tmp/readable".to_string()),
+            ..PanelPrefs::default()
+        };
+        capture_prefs(&panel, &mut prefs);
+        assert_eq!(prefs.start_dir.as_deref(), Some("/tmp/readable"));
     }
 }

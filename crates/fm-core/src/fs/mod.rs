@@ -17,7 +17,10 @@ use std::fs;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
 
-use crate::types::{DirListing, Entry, EntryCategory, EntryKind, EntryMarker, SortMode};
+use crate::types::{
+    AccessRemedy, DirAccessError, DirAccessKind, DirListing, Entry, EntryCategory, EntryKind,
+    EntryMarker, SortMode,
+};
 
 /// Resolves and memoizes uid/gid → name lookups for the span of a single
 /// listing. Most directories are owned by one or two users, so a tiny cache
@@ -77,15 +80,22 @@ pub fn list_dir(path: &str, show_hidden: bool, sort: SortMode) -> DirListing {
 
     let mut children: Vec<Entry> = Vec::new();
     let mut resolver = OwnerResolver::default();
-    if let Ok(read) = fs::read_dir(p) {
-        for dirent in read.flatten() {
-            let name = dirent.file_name().to_string_lossy().into_owned();
-            if !show_hidden && name.starts_with('.') {
-                continue;
+    // The failure is reported, not swallowed: a directory the process may not
+    // read is a first-class state, and an empty listing is indistinguishable
+    // from an empty directory (§5.6).
+    let access = match fs::read_dir(p) {
+        Ok(read) => {
+            for dirent in read.flatten() {
+                let name = dirent.file_name().to_string_lossy().into_owned();
+                if !show_hidden && name.starts_with('.') {
+                    continue;
+                }
+                children.push(entry_from_path(&dirent.path(), name, &mut resolver));
             }
-            children.push(entry_from_path(&dirent.path(), name, &mut resolver));
+            None
         }
-    }
+        Err(e) => Some(DirAccessError::from_io(&e)),
+    };
 
     sort_entries(&mut children, sort);
     entries.extend(children);
@@ -93,7 +103,73 @@ pub fn list_dir(path: &str, show_hidden: bool, sort: SortMode) -> DirListing {
     DirListing {
         path: path.to_string(),
         entries,
+        access,
     }
+}
+
+impl DirAccessError {
+    /// Classify a failed `read_dir` into the state the panel renders (§5.6).
+    ///
+    /// The split that matters is `EPERM` vs `EACCES`, which
+    /// [`std::io::ErrorKind::PermissionDenied`] flattens together: on macOS a
+    /// TCC refusal arrives as `EPERM` and is fixed by a privacy grant, while
+    /// `EACCES` is the permission bits and is fixed by a mode or owner change.
+    /// Offering the wrong one of those sends the user somewhere that cannot help.
+    pub fn from_io(err: &std::io::Error) -> Self {
+        use std::io::ErrorKind;
+
+        let kind = match err.kind() {
+            ErrorKind::PermissionDenied => {
+                if is_policy_denial(err) {
+                    DirAccessKind::Restricted
+                } else {
+                    DirAccessKind::Denied
+                }
+            }
+            ErrorKind::NotFound => DirAccessKind::Missing,
+            _ => DirAccessKind::Failed,
+        };
+
+        // Leads with what happened; the path is left out because this renders
+        // directly under the panel header, which already shows it.
+        let message = match kind {
+            DirAccessKind::Restricted => "macOS is blocking access to this folder. Grant \
+                 access in Privacy & Security, then retry."
+                .to_string(),
+            DirAccessKind::Denied => "You do not have permission to read this folder.".to_string(),
+            DirAccessKind::Missing => "This folder no longer exists.".to_string(),
+            DirAccessKind::Failed => format!("Could not read this folder: {err}."),
+        };
+
+        // A retry is only worth offering where the condition can plausibly clear
+        // while the panel sits on it. A vanished directory is the watcher's job.
+        let remedies = match kind {
+            DirAccessKind::Restricted => vec![AccessRemedy::PrivacySettings, AccessRemedy::Retry],
+            DirAccessKind::Denied | DirAccessKind::Failed => vec![AccessRemedy::Retry],
+            DirAccessKind::Missing => Vec::new(),
+        };
+
+        Self {
+            kind,
+            message,
+            remedies,
+        }
+    }
+}
+
+/// Is this denial the OS privacy policy rather than the permission bits?
+///
+/// macOS reports a TCC refusal as `EPERM`, which nothing else `read_dir` does in
+/// practice. Elsewhere `EPERM` carries no such meaning, so every denial is a
+/// permission-bits denial until Phase 4 says otherwise for that platform.
+#[cfg(target_os = "macos")]
+fn is_policy_denial(err: &std::io::Error) -> bool {
+    err.raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_policy_denial(_err: &std::io::Error) -> bool {
+    false
 }
 
 /// The synthetic parent-directory entry.
@@ -511,9 +587,10 @@ mod tests {
     }
 
     #[test]
-    fn unreadable_dir_yields_only_dotdot_not_a_panic() {
+    fn unreadable_dir_yields_dotdot_and_says_why() {
         // A path that does not exist: read_dir fails, but we still get a listing
-        // with `..` and no crash (§5.6).
+        // with `..` and no crash — and, unlike an empty directory, it says so
+        // rather than rendering as nothing at all (§5.6).
         let listing = list_dir(
             "/definitely/not/a/real/path/xyzzy",
             true,
@@ -521,6 +598,77 @@ mod tests {
         );
         let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, [".."]);
+        assert_eq!(listing.access.map(|a| a.kind), Some(DirAccessKind::Missing));
+    }
+
+    #[test]
+    fn an_empty_directory_is_not_an_error() {
+        let dir = std::env::temp_dir().join(format!("fm-empty-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+
+        let listing = list_dir(dir.to_str().unwrap(), true, SortMode::NameFoldersFirst);
+        assert_eq!(listing.entries.len(), 1); // just `..`
+        assert!(listing.access.is_none());
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn denials_are_classified_by_errno_not_by_error_kind() {
+        // `ErrorKind::PermissionDenied` covers both, and they need different
+        // remedies: EPERM on macOS is TCC (a privacy grant), EACCES is the
+        // permission bits.
+        let eacces = DirAccessError::from_io(&std::io::Error::from_raw_os_error(libc::EACCES));
+        assert_eq!(eacces.kind, DirAccessKind::Denied);
+        assert_eq!(eacces.remedies, vec![AccessRemedy::Retry]);
+
+        let eperm = DirAccessError::from_io(&std::io::Error::from_raw_os_error(libc::EPERM));
+        let expected = if cfg!(target_os = "macos") {
+            (
+                DirAccessKind::Restricted,
+                vec![AccessRemedy::PrivacySettings, AccessRemedy::Retry],
+            )
+        } else {
+            (DirAccessKind::Denied, vec![AccessRemedy::Retry])
+        };
+        assert_eq!((eperm.kind, eperm.remedies), expected);
+
+        let enoent = DirAccessError::from_io(&std::io::Error::from_raw_os_error(libc::ENOENT));
+        assert_eq!(enoent.kind, DirAccessKind::Missing);
+        // Nothing to retry: a vanished directory is the watcher's business.
+        assert!(enoent.remedies.is_empty());
+
+        let enotdir = DirAccessError::from_io(&std::io::Error::from_raw_os_error(libc::ENOTDIR));
+        assert_eq!(enotdir.kind, DirAccessKind::Failed);
+        assert!(!enotdir.message.is_empty());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_directory_with_no_permissions_reports_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        // root reads it regardless, which would make the assertion meaningless.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
+        let dir = std::env::temp_dir().join(format!("fm-denied-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("secret.txt"), b"x").unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let listing = list_dir(dir.to_str().unwrap(), true, SortMode::NameFoldersFirst);
+        let access = listing.access.clone().expect("denial must be reported");
+        assert_eq!(access.kind, DirAccessKind::Denied);
+        assert!(access.remedies.contains(&AccessRemedy::Retry));
+        // `..` survives, so the panel is never a dead end the user cannot leave.
+        let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, [".."]);
+
+        // Restore before removing: rm on a 0o000 directory fails.
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::remove_dir_all(&dir).ok();
     }
 
     /// A bare entry for the pure sorting tests.

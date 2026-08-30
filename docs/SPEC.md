@@ -172,6 +172,7 @@ Reference behavior: **model these on FarManager first; where FarManager guidance
   | Became unreadable (TCC / permissions) | **Stays put** and says so, offering a retry. Navigating away would hide the actual problem. |
 
   Each of these attaches a short, **non-modal** notice to the panel. This is not the red failure dialog: a background process renaming a folder is not an operation failure.
+- **Where the red-background message goes.** A *directory* that cannot be read is a state, not an event, so it renders in the panel itself — in the palette's error colour, filling what would otherwise be an empty listing, with `..` still there to leave by. The modal red-background dialog stays reserved for an operation that failed (§5.4b), which is a question awaiting an answer. The panel state reads the same whichever direction it came from: navigating into the folder, or the folder becoming unreadable underneath a panel already in it.
 - Every file operation returns a structured result the frontend can render (success / partial / failed-with-reason), rather than throwing opaque errors.
 - **Operating on a stale listing:** before a destructive operation runs, each resolved path is re-checked against the filesystem and the operation is refused with a clear message if the listing no longer describes it. This is not a fix for the general time-of-check/time-of-use race, which no check of this shape can close; it catches the case that actually occurs.
 
