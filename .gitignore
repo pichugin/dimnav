@@ -60,3 +60,8 @@ __pycache__/
 !**/*.key.pub
 *.provisionprofile
 *.certSigningRequest
+
+# Demo recording working files. The video is published as a GitHub release
+# asset, never committed: it is re-recorded whenever the UI moves and git
+# would keep every superseded copy for ever.
+scripts/.demo-out/

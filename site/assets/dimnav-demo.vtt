@@ -1,0 +1,34 @@
+WEBVTT
+
+00:00:03.045 --> 00:00:05.827
+Two panels — source and destination at once
+
+00:00:05.877 --> 00:00:12.177
+Arrows move the cursor; Enter opens, Backspace comes back to it
+
+00:00:14.208 --> 00:00:18.408
+⌃4 — a detailed view with size, date and permissions
+
+00:00:18.902 --> 00:00:23.802
+⌘F jumps to a name as you type it
+
+00:00:24.389 --> 00:00:29.989
+F3 opens a file in place — text, hex or image
+
+00:00:34.241 --> 00:00:37.741
+Space selects — the footer counts what you picked
+
+00:00:39.204 --> 00:00:45.504
+F5 copies — asynchronous, cancellable, with real progress
+
+00:00:47.552 --> 00:00:54.552
+⌘T runs commands where the panel is pointing
+
+00:00:55.790 --> 00:01:01.390
+Changes made outside the app appear on their own
+
+00:01:01.465 --> 00:01:07.765
+F2 — themes and settings, applied live
+
+00:01:10.615 --> 00:01:15.515
+F1 lists every binding, generated from the live keymap

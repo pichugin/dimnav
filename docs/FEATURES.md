@@ -635,7 +635,17 @@ security-scoped bookmarks on every panel path.
       download from the releases API with a no-JS fallback
 - [x] Apple Developer Program enrolment and the signing secrets (manual, external) —
       procedure and the secret inventory are in `docs/RELEASE.md`
-- [ ] A screenshot for the README and the site
+- [x] **Screenshots and a demo video for the README and the site.** Four
+      screenshots — panels, the viewer, a copy with its collision dialog, the
+      expanded terminal — plus an 80-second demo video, all captured against a
+      generated demo tree (`scripts/demo-tree.sh`) by two driver scripts
+      (`scripts/demo-shots.sh`, `scripts/record-demo.sh`) so they can be
+      re-made whenever the UI moves. The video is published as a **GitHub
+      release asset** rather than committed: it is re-recorded on every UI
+      change and git keeps every superseded copy for ever. Captions ride along
+      as a WebVTT sidecar, so wording is fixable without re-encoding.
+      `site/assets` came out **smaller than before** (862 KB → 284 KB), because
+      the same pass re-exported a 770 KB logo and a 92 KB favicon
 
 ---
 

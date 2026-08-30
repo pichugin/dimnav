@@ -6,6 +6,8 @@ All notable changes to dimnav are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-30
+
 ### Added
 
 - **F2 opens Settings.** Every value the app persists could only be changed by
@@ -130,5 +132,6 @@ First public release.
 - F1 help: an About topic and a shortcut list generated from the live keymap.
 - Signed in-app updates, surfaced in Help → About.
 
-[Unreleased]: https://github.com/pichugin/dimnav/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/pichugin/dimnav/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/pichugin/dimnav/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/pichugin/dimnav/releases/tag/v0.1.0

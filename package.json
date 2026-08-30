@@ -1,6 +1,6 @@
 {
   "name": "dimnav",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Keyboard-first two-panel file manager for macOS. Frontend is a thin, swappable Svelte renderer.",
   "type": "module",
   "license": "MIT",

@@ -1,18 +1,20 @@
 <div align="center">
 
-<img src="site/assets/dimnav-logo.png" alt="dimnav" width="360">
+<img src="site/assets/dimnav-logo.webp" alt="dimnav" width="360">
 
 **A fast, keyboard-first two-panel file manager for macOS.**
 
 In the Norton Commander / Far Manager / Midnight Commander lineage — two panels,
 function keys, and your hands never leaving the keyboard.
 
-[Download][latest] · [Website](https://dimnav.com) · [Shortcuts](#shortcuts) · [Building](#building)
+[Download][latest] · [Website](https://dimnav.com) · [Watch the demo](https://dimnav.com/#demo) · [Shortcuts](#shortcuts) · [Building](#building)
 
 [![CI](https://github.com/pichugin/dimnav/actions/workflows/ci.yml/badge.svg)](https://github.com/pichugin/dimnav/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 </div>
+
+<img src="site/assets/shot-panels.webp" alt="Two panels side by side listing a project directory, with entries coloured by file type">
 
 ---
 

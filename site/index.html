@@ -3,20 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>dimnav — a keyboard-first two-panel file manager for macOS</title>
+    <title>dimnav — a two-panel file manager for macOS</title>
     <meta
       name="description"
-      content="A fast, keyboard-first two-panel file manager for macOS, in the Norton Commander lineage. Free and open source."
+      content="A fast two-panel file manager for macOS, in the Norton Commander lineage. Source and destination side by side, every operation on a function key, with a terminal, viewer and editor built in. Free and open source."
     />
     <link rel="icon" href="assets/dimnav-icon.png" />
     <link rel="canonical" href="https://dimnav.com/" />
 
-    <meta property="og:title" content="dimnav" />
+    <meta property="og:title" content="dimnav — a two-panel file manager for macOS" />
     <meta
       property="og:description"
-      content="A fast, keyboard-first two-panel file manager for macOS."
+      content="Source and destination side by side, every operation on a function key, with a terminal, viewer and editor built in."
     />
-    <meta property="og:image" content="https://dimnav.com/assets/dimnav-logo.png" />
+    <!-- A shot of the app itself, not the wordmark: the social card is the one
+         place a stranger decides whether this looks like something they use. -->
+    <meta property="og:image" content="https://dimnav.com/assets/og-panels.jpg" />
     <meta property="og:url" content="https://dimnav.com/" />
     <meta name="twitter:card" content="summary_large_image" />
 
@@ -214,17 +216,80 @@
       .table-scroll {
         overflow-x: auto;
       }
+
+      .fineprint {
+        margin: 20px 0 0;
+        font-size: 0.9rem;
+      }
+
+      .jump {
+        color: var(--fg-dim);
+        text-decoration: none;
+        border-bottom: 1px solid var(--border);
+      }
+      .jump:hover {
+        color: var(--fg);
+      }
+
+      /* Text wants a 760px measure; screenshots and a 1280px-wide video do not.
+         The media blocks break out of `main` and re-centre on the viewport,
+         while every paragraph around them keeps its comfortable line length. */
+      .section-media .media {
+        width: min(1040px, calc(100vw - 48px));
+        margin-left: 50%;
+        transform: translateX(-50%);
+        margin-top: 20px;
+      }
+
+      .demo {
+        display: block;
+        width: 100%;
+        height: auto;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        background: var(--bg-alt);
+      }
+
+      .shots {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+        gap: 24px;
+        padding: 0;
+        list-style: none;
+      }
+      .shots img {
+        display: block;
+        width: 100%;
+        height: auto;
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+      }
+      .shots span {
+        display: block;
+        margin-top: 8px;
+        color: var(--fg-dim);
+        font-size: 0.9rem;
+      }
+      .shots code {
+        font-size: 0.9em;
+      }
     </style>
   </head>
 
   <body>
     <main>
       <header class="hero">
-        <img src="assets/dimnav-logo.png" alt="dimnav" width="260" />
-        <h1>Two panels. No mouse.</h1>
+        <img
+          src="assets/dimnav-logo.webp"
+          alt="dimnav"
+          width="260"
+          height="260"
+        />
+        <h1>Two panels. One keyboard.</h1>
         <p>
-          A fast, keyboard-first file manager for macOS, in the Norton Commander
-          lineage. Free and open source.
+          A fast file manager for macOS in the Norton Commander lineage. Source
+          and destination side by side, every operation on a function key, with a
+          terminal, viewer and editor built in. Free and open source.
         </p>
 
         <div class="download">
@@ -239,10 +304,53 @@
           >
           <p class="meta">
             <span id="release-meta">Apple Silicon · macOS 13+</span><br />
-            Signed and notarized by Apple — no security warnings.
+            Signed and notarized by Apple.
           </p>
+          <p class="meta"><a class="jump" href="#demo">See it work ↓</a></p>
         </div>
       </header>
+
+      <section id="demo" class="section-media">
+        <h2>See it work</h2>
+        <p class="prose">
+          Eighty seconds through a working directory: navigating, the detailed
+          view, quick search, the viewer, selecting and copying, the built-in
+          terminal, a change arriving from outside the app, and the theme
+          picker. No audio — captions name the keys.
+        </p>
+        <div class="media">
+          <!-- The file itself is a GitHub release asset rather than a repo file.
+               A demo has to be re-recorded every time the UI moves, and git keeps
+               every superseded copy forever; the release can simply be clobbered.
+               preload="none" because the source is cross-origin and the poster
+               already carries the section — nothing loads until someone plays it.
+               If the asset is ever unreachable the poster stays put and the inner
+               link still works. -->
+          <video
+            class="demo"
+            controls
+            muted
+            playsinline
+            preload="none"
+            poster="assets/demo-poster.webp"
+            width="1280"
+            height="800"
+          >
+            <source src="https://github.com/pichugin/dimnav/releases/download/media/dimnav-demo.mp4" type="video/mp4" />
+            <!-- Burned-in captions would need a re-encode for every wording fix,
+                 and would blur on downscale. A track file stays crisp, stays
+                 editable, and can be turned off. -->
+            <track
+              kind="captions"
+              srclang="en"
+              label="Keys"
+              src="assets/dimnav-demo.vtt"
+              default
+            />
+            <a href="https://github.com/pichugin/dimnav/releases/download/media/dimnav-demo.mp4">Watch the demo</a>
+          </video>
+        </div>
+      </section>
 
       <section>
         <h2>What it does</h2>
@@ -250,46 +358,134 @@
           <li>
             <strong>Two panels</strong>
             <span
-              >Source and destination on screen at once. Each panel keeps its own
-              columns, sort order, and hidden-file setting between launches.</span
+              >Source and destination on screen at once. One, two or three
+              columns, or a detailed view with size, date and permissions — per
+              panel, and remembered between launches.</span
             >
           </li>
           <li>
             <strong>One key per operation</strong>
             <span
-              >Copy, move, rename, delete. Asynchronous, cancellable, with real
-              progress and sane collision handling.</span
+              ><kbd>F5</kbd> copy, <kbd>F6</kbd> move, <kbd>F7</kbd> new folder,
+              <kbd>F8</kbd> delete. Asynchronous, cancellable, with progress and
+              Far Manager-style collision handling — and never a silent
+              overwrite.</span
+            >
+          </li>
+          <li>
+            <strong>Panels that keep up</strong>
+            <span
+              >Both directories are watched. A change made in Finder, a terminal
+              or a build tool appears on its own, without moving your cursor,
+              your selection or your scroll position.</span
             >
           </li>
           <li>
             <strong>Built-in terminal</strong>
             <span
-              >Command history, sharing the panel's working directory. No context
-              switch to get a shell.</span
+              >Runs in the panel's directory, and <code>cd</code> moves the panel
+              with it. <kbd>⌃Enter</kbd> drops the name under the cursor onto the
+              command line; history survives restarts.</span
             >
           </li>
           <li>
             <strong>Viewer and editor</strong>
             <span
-              ><kbd>F3</kbd> and <kbd>F4</kbd> open a file in place, including a hex
-              mode. Large files stay responsive.</span
+              ><kbd>F3</kbd> and <kbd>F4</kbd> open a file in place — text, hex
+              or image. Search, goto, encoding detection, and a save that keeps
+              the encoding, line endings and permissions it found.</span
             >
           </li>
           <li>
-            <strong>Native, not a web page</strong>
+            <strong>Find it as you type</strong>
             <span
-              >A Rust core with a thin rendering layer. Small download, quick
-              launch, low memory.</span
+              ><kbd>⌘F</kbd> jumps to an entry as you spell it. A character that
+              matches nothing is refused, so the cursor is always sitting on a
+              real file.</span
             >
           </li>
           <li>
-            <strong>Permission handled properly</strong>
+            <strong>Colour that means something</strong>
             <span
-              >When an operation needs privileges, macOS asks — the app never sees
-              your password.</span
+              >Ten file categories, decided by name rather than by the execute
+              bit — so a <code>0755</code> PDF reads as a document. The same rule
+              decides whether <kbd>Enter</kbd> opens it or runs it.</span
+            >
+          </li>
+          <li>
+            <strong>Yours to configure</strong>
+            <span
+              ><kbd>F2</kbd> for themes and settings, applied live with no
+              restart, or hand-edit a plain TOML file. <kbd>F1</kbd> lists every
+              binding, generated from the live keymap so it cannot drift.</span
+            >
+          </li>
+          <li>
+            <strong>Native, signed, self-updating</strong>
+            <span
+              >A Rust core with a thin rendering layer: small download, quick
+              launch, low memory. Developer ID signed, notarized by Apple, and
+              the updates are signed too.</span
             >
           </li>
         </ul>
+        <p class="prose fineprint">
+          Apple Silicon, macOS 13 and later — Windows and Linux are planned.
+          Deletes are real deletes unless you tick <em>Move to Trash</em>, and
+          when an operation needs privileges macOS asks for them: the app never
+          sees your password.
+        </p>
+      </section>
+
+      <section id="screenshots" class="section-media">
+        <h2>A closer look</h2>
+        <div class="media">
+          <ul class="shots">
+            <li>
+              <img
+                src="assets/shot-panels.webp"
+                alt="Two panels side by side listing a project directory, entries coloured by file type"
+                width="1000"
+                height="625"
+                loading="lazy"
+              />
+              <span>Two panels, coloured by file type, with the focused entry's attributes below.</span>
+            </li>
+            <li>
+              <img
+                src="assets/shot-copy.webp"
+                alt="A copy in progress with a file collision dialog offering Skip, Overwrite and Skip All"
+                width="1000"
+                height="625"
+                loading="lazy"
+              />
+              <span>Copy asks before it overwrites — Skip, Overwrite, or all of them at once.</span>
+            </li>
+            <li>
+              <img
+                src="assets/shot-terminal.webp"
+                alt="The built-in terminal expanded below the panels showing command output"
+                width="1000"
+                height="625"
+                loading="lazy"
+              />
+              <span>The terminal runs where the panel is pointing, and <code>cd</code> moves the panel.</span>
+            </li>
+            <li>
+              <img
+                src="assets/shot-viewer.webp"
+                alt="The built-in file viewer showing a Markdown document with line numbers"
+                width="1000"
+                height="625"
+                loading="lazy"
+              />
+              <span
+                >The viewer opens a file in place — text, hex or image — with
+                search, goto and wrapping on the function keys.</span
+              >
+            </li>
+          </ul>
+        </div>
       </section>
 
       <section>
@@ -302,12 +498,16 @@
                 <td>Switch panel</td>
               </tr>
               <tr>
-                <td><kbd>Enter</kbd> / <kbd>Backspace</kbd></td>
-                <td>Enter a directory / go up, landing on the folder you left</td>
+                <td><kbd>Enter</kbd></td>
+                <td>Enter a directory, open a file, or run an executable</td>
+              </tr>
+              <tr>
+                <td><kbd>Backspace</kbd></td>
+                <td>Go up, landing on the folder you just left</td>
               </tr>
               <tr>
                 <td><kbd>Space</kbd></td>
-                <td>Select</td>
+                <td>Select — <kbd>Shift</kbd> and an arrow sweeps a run</td>
               </tr>
               <tr>
                 <td><kbd>F3</kbd> / <kbd>F4</kbd></td>
@@ -322,12 +522,20 @@
                 <td>New folder / delete</td>
               </tr>
               <tr>
+                <td><kbd>⌃1</kbd>–<kbd>⌃4</kbd> / <kbd>⌃S</kbd></td>
+                <td>Column count and detailed view / sort order</td>
+              </tr>
+              <tr>
+                <td><kbd>⌃=</kbd></td>
+                <td>Show this folder on the other panel</td>
+              </tr>
+              <tr>
                 <td><kbd>⌘F</kbd> / <kbd>⌘T</kbd></td>
                 <td>Quick search / terminal</td>
               </tr>
               <tr>
-                <td><kbd>F1</kbd></td>
-                <td>Every other shortcut</td>
+                <td><kbd>F1</kbd> / <kbd>F2</kbd></td>
+                <td>Every other shortcut / settings</td>
               </tr>
             </tbody>
           </table>
@@ -382,6 +590,7 @@
           /* offline, rate-limited, or no release yet — leave the fallback */
         }
       })();
+
     </script>
   </body>
 </html>
