@@ -39,6 +39,24 @@ pub trait HelpTopic {
     fn body(&self, ctx: &crate::help::HelpCtx<'_>) -> crate::types::HelpBody;
 }
 
+/// A page in the F2 settings book — the second "contribute a UI surface"
+/// extension point (§6a), in the same form as [`HelpTopic`]: the page hands back
+/// structured content and the renderer decides how to paint it, so a plugin can
+/// never ship markup and the swappable-frontend rule stays intact.
+///
+/// The in-tree pages in [`crate::settings`] are written against this rather than
+/// being special-cased, so the loader in Phase 5 has nothing new to teach them.
+/// A plugin contributing a settings page is then a registry entry plus whatever
+/// [`crate::settings::apply`] needs to accept for the field ids it declares.
+pub trait SettingsPage {
+    /// Stable identifier, e.g. `"appearance"`.
+    fn id(&self) -> &str;
+    /// Label for the page rail.
+    fn title(&self) -> &str;
+    /// Render this page against the config currently in force.
+    fn body(&self, ctx: &crate::settings::SettingsCtx<'_>) -> crate::types::SettingsBody;
+}
+
 /// Custom view / edit / open / preview behaviour for a file type — e.g. an image
 /// previewer, a hex viewer, or an archive-as-virtual-directory provider (§6a).
 pub trait FileTypeHandler {

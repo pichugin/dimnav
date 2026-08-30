@@ -26,7 +26,10 @@ use std::sync::OnceLock;
 use serde::Deserialize;
 
 use crate::plugin::ThemeProvider;
-use crate::types::{Appearance, AppearanceMode, Config, EntryCategory, Palette, ThemeVar};
+use crate::types::{
+    Appearance, AppearanceMode, Config, EntryCategory, Palette, ThemeSource, ThemeSummary,
+    ThemeVar,
+};
 
 /// The id used when the configured one names nothing.
 pub const DEFAULT_THEME: &str = "classic";
@@ -61,6 +64,14 @@ pub const TOKENS: &[&str] = &[
     "term-ok",
     "term-run",
 ];
+
+/// The handful of tokens a picker swatch is drawn from.
+///
+/// A preview has to say what a theme *feels* like in a few square millimetres,
+/// so it is the page colours plus the accent plus two listing colours far enough
+/// apart to show the palette's range — not a fair sample of all 23, which at
+/// swatch size would read as noise.
+pub const PREVIEW_TOKENS: &[&str] = &["bg", "fg", "accent", "file-dir", "file-exec"];
 
 /// The token that colours a listing row of the given category (§4).
 ///
@@ -220,6 +231,16 @@ fn document(id: &str) -> Option<ThemeDoc> {
     Some(doc.over(base))
 }
 
+/// Whether `id` names a theme that can actually be applied — bundled or a
+/// parsable `themes/<id>.toml`.
+///
+/// [`resolve`] falls back for an unknown id rather than failing, which is right
+/// for painting but wrong for *storing*: a picker must not write an id that
+/// silently resolves to something else.
+pub fn exists(id: &str) -> bool {
+    document(id).is_some()
+}
+
 /// Resolve the configured theme into a paintable [`Palette`].
 ///
 /// `os` is the appearance the operating system is currently in — a platform fact
@@ -231,11 +252,7 @@ fn document(id: &str) -> Option<ThemeDoc> {
 /// unpainted; a config the user typed by hand must not be able to stop the app
 /// from starting (§7).
 pub fn resolve(config: &Config, os: Appearance) -> Palette {
-    let wanted = match config.appearance {
-        AppearanceMode::System => os,
-        AppearanceMode::Light => Appearance::Light,
-        AppearanceMode::Dark => Appearance::Dark,
-    };
+    let wanted = wanted_appearance(config, os);
 
     let (id, doc) = match document(&config.theme) {
         Some(doc) => (config.theme.clone(), doc),
@@ -248,15 +265,7 @@ pub fn resolve(config: &Config, os: Appearance) -> Palette {
         ),
     };
 
-    // A theme that pins an appearance wins over the preference: it defines only
-    // that variant, so honouring `system` would paint half a palette. Otherwise
-    // take what was wanted, unless the theme does not define it.
-    let appearance = match doc.appearance {
-        Some(pinned) => pinned,
-        None if doc.defines(wanted) => wanted,
-        None if doc.defines(other(wanted)) => other(wanted),
-        None => wanted,
-    };
+    let appearance = pick_appearance(&doc, wanted);
 
     let mut vars: Vec<ThemeVar> = doc
         .variant(appearance)
@@ -274,6 +283,103 @@ pub fn resolve(config: &Config, os: Appearance) -> Palette {
         appearance,
         vars,
     }
+}
+
+/// Which variant of `doc` to paint, given the appearance the user asked for.
+///
+/// A theme that pins an appearance wins over the preference: it defines only that
+/// variant, so honouring `system` would paint half a palette. Otherwise take what
+/// was wanted, unless the theme does not define it.
+///
+/// Shared by [`resolve`] and [`available`] so a picker swatch cannot show one
+/// variant while applying the theme paints the other.
+fn pick_appearance(doc: &ThemeDoc, wanted: Appearance) -> Appearance {
+    match doc.appearance {
+        Some(pinned) => pinned,
+        None if doc.defines(wanted) => wanted,
+        None if doc.defines(other(wanted)) => other(wanted),
+        None => wanted,
+    }
+}
+
+/// The appearance the user's preference asks for, before any theme has a say.
+fn wanted_appearance(config: &Config, os: Appearance) -> Appearance {
+    match config.appearance {
+        AppearanceMode::System => os,
+        AppearanceMode::Light => Appearance::Light,
+        AppearanceMode::Dark => Appearance::Dark,
+    }
+}
+
+/// Every theme the picker can offer: the bundled ones, then whatever
+/// `themes/*.toml` holds (§7).
+///
+/// Each carries a small preview swatch resolved the same way [`resolve`] would
+/// resolve it, so what the picker shows is what applying it paints.
+///
+/// A user file that is missing, unreadable or malformed is **skipped**, not
+/// reported: the picker's job is to list what can be applied, and a theme that
+/// cannot be parsed cannot be applied. It is the same posture [`user_doc`] takes,
+/// and it means a half-written theme file cannot stop the page from rendering.
+///
+/// A user file whose stem collides with a bundled id is skipped too, because
+/// [`document`] resolves bundled first — listing it would offer something the
+/// picker could not actually select.
+pub fn available(config: &Config, os: Appearance) -> Vec<ThemeSummary> {
+    let wanted = wanted_appearance(config, os);
+    let mut out = Vec::new();
+
+    for provider in registry() {
+        if let Some(summary) = summarize(provider.id(), ThemeSource::Bundled, wanted) {
+            out.push(summary);
+        }
+    }
+
+    let mut user_ids: Vec<String> = theme_dir()
+        .and_then(|dir| std::fs::read_dir(dir).ok())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
+        .filter_map(|e| e.path().file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .filter(|id| bundled(id).is_none())
+        .collect();
+    // `read_dir` order is filesystem order, which is arbitrary and would let the
+    // picker reshuffle itself between launches.
+    user_ids.sort();
+    user_ids.dedup();
+
+    for id in user_ids {
+        if let Some(summary) = summarize(&id, ThemeSource::User, wanted) {
+            out.push(summary);
+        }
+    }
+
+    out
+}
+
+/// One picker row, or `None` if the theme will not resolve.
+fn summarize(id: &str, source: ThemeSource, wanted: Appearance) -> Option<ThemeSummary> {
+    let doc = document(id)?;
+    let appearance = pick_appearance(&doc, wanted);
+    let variant = doc.variant(appearance);
+    Some(ThemeSummary {
+        id: id.to_string(),
+        // A theme file with no `name` is still perfectly usable, so fall back to
+        // its id rather than offering a nameless row.
+        name: if doc.name.is_empty() { id.to_string() } else { doc.name.clone() },
+        source,
+        pinned: doc.appearance,
+        swatches: PREVIEW_TOKENS
+            .iter()
+            .filter_map(|t| {
+                variant.get(*t).map(|v| ThemeVar {
+                    name: (*t).to_string(),
+                    value: v.clone(),
+                })
+            })
+            .collect(),
+    })
 }
 
 /// The appearance that is not this one.

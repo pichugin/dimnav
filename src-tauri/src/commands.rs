@@ -18,8 +18,9 @@ use fm_core::types::{
     Appearance, AppInfo, AppSnapshot, Config, DeleteRequest, DirListing, EditDoc, EntryKind,
     ErrorResolution,
     GotoTarget, HelpBook, HistoryDir, KeyBinding, MediaKind, Motion, NavTarget, OpKind, OpenAction,
-    OpenOutcome, OpRequest, Palette, PanelId, Resolution, SaveOutcome, SearchDirection, SortMode,
-    TerminalBuffer, ViewMode, ViewMotion, ViewPage, ViewerMode,
+    OpenOutcome, OpRequest, Palette, PanelId, Resolution, SaveOutcome, SearchDirection,
+    SettingsBook, SettingsResult, SortMode, TerminalBuffer, ViewMode, ViewMotion, ViewPage,
+    ViewerMode,
 };
 use fm_core::view::{edit::Docs, Sessions};
 use tauri::{AppHandle, State};
@@ -157,6 +158,73 @@ pub fn get_palette(state: State<'_, SharedState>, window: tauri::Window) -> Resu
 #[specta::specta]
 pub fn get_keymap() -> Vec<KeyBinding> {
     fm_core::config::default_keymap()
+}
+
+/// The F2 settings book: every configurable value, already rendered (§7).
+///
+/// The core decides which settings exist, what they are called, what they may be
+/// set to and what their defaults are; this only supplies the OS appearance,
+/// which is the one fact `fm-core` cannot read for itself (same arrangement as
+/// [`get_palette`]).
+#[tauri::command]
+#[specta::specta]
+pub fn get_settings(
+    state: State<'_, SharedState>,
+    window: tauri::Window,
+) -> Result<SettingsBook, String> {
+    let os = os_appearance(&window);
+    let s = state.lock().map_err(lock_err)?;
+    Ok(fm_core::settings::book(&s.config, os))
+}
+
+/// Write one setting and persist it (§7).
+///
+/// Applied immediately, like every other preference in the app — there is no
+/// staged-then-confirmed state for a settings dialog to get out of step with.
+/// Validation is the core's: an id or a value it refuses leaves the config
+/// untouched and returns the reason.
+#[tauri::command]
+#[specta::specta]
+pub fn set_setting(
+    state: State<'_, SharedState>,
+    window: tauri::Window,
+    id: String,
+    value: fm_core::types::FieldValue,
+) -> Result<SettingsResult, String> {
+    let os = os_appearance(&window);
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::settings::apply(&mut s.config, &id, &value)?;
+    persist(&mut s);
+    Ok(settings_result(&mut s, os))
+}
+
+/// Restore one setting to its default and persist that (§7).
+#[tauri::command]
+#[specta::specta]
+pub fn reset_setting(
+    state: State<'_, SharedState>,
+    window: tauri::Window,
+    id: String,
+) -> Result<SettingsResult, String> {
+    let os = os_appearance(&window);
+    let mut s = state.lock().map_err(lock_err)?;
+    fm_core::settings::reset(&mut s.config, &id)?;
+    persist(&mut s);
+    Ok(settings_result(&mut s, os))
+}
+
+/// Everything a settings write can have changed, gathered in one payload.
+///
+/// Goes through `snapshot_after_input` like every other user-initiated command,
+/// so an open quick-search box is closed by reaching for the settings popup
+/// exactly as it is by reaching for anything else (§5.9).
+fn settings_result(state: &mut AppState, os: Appearance) -> SettingsResult {
+    SettingsResult {
+        book: fm_core::settings::book(&state.config, os),
+        palette: fm_core::theme::resolve(&state.config, os),
+        keymap: fm_core::config::default_keymap(),
+        snapshot: state.snapshot_after_input(),
+    }
 }
 
 /// The F1 help book, filtered by `query` (§6). Both the content and the search

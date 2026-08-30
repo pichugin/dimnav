@@ -186,6 +186,7 @@ pub fn default_keymap() -> Vec<KeyBinding> {
     let editor = |action: &str, keys: &[&str]| binding("editor", action, keys);
     let terminal = |action: &str, keys: &[&str]| binding("terminal", action, keys);
     let help = |action: &str, keys: &[&str]| binding("help", action, keys);
+    let settings = |action: &str, keys: &[&str]| binding("settings", action, keys);
     let search = |action: &str, keys: &[&str]| binding("search", action, keys);
     vec![
         // Cursor motion (§5.2).
@@ -293,7 +294,11 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         // does in FAR's viewer) and F6 does the view↔edit swap, so F4 never
         // means two things at once.
         viewer("viewer.close", &["Escape", "F10"]),
-        viewer("viewer.toggle_wrap", &["F2"]),
+        // FAR puts wrap on F2, but F2 now opens Settings from *every* surface
+        // (see below) — and a key that means one thing in four places and
+        // something else in the fifth is worse than an unfamiliar chord. ⌃W is
+        // the wrap key everywhere else in the viewer's lineage.
+        viewer("viewer.toggle_wrap", &["Ctrl+w"]),
         viewer("viewer.toggle_hex", &["F4"]),
         viewer("viewer.goto", &["F5"]),
         viewer("viewer.to_edit", &["F6"]),
@@ -341,6 +346,39 @@ pub fn default_keymap() -> Vec<KeyBinding> {
         help("help.scroll_down", &["ArrowDown"]),
         help("help.page_up", &["PageUp"]),
         help("help.page_down", &["PageDown"]),
+        // --- Settings (§7) ---------------------------------------------------
+        // F2 opens settings from every context, the way F1 opens help. The two
+        // popups are the same size and cover the same ground, so they swap
+        // rather than stack: F2 in help closes help and opens settings, F1 in
+        // settings does the reverse, and neither is ever underneath the other.
+        bind("settings.open", &["F2"]),
+        viewer("settings.open", &["F2"]),
+        editor("settings.open", &["F2"]),
+        terminal("settings.open", &["F2"]),
+        help("settings.open", &["F2"]),
+        settings("help.open", &["F1"]),
+        // The settings popup's own context, mirroring help's. `Escape` MUST be
+        // declared here for the same reason it must be declared there: it is
+        // bound in every other context (terminal.curtain, viewer.close,
+        // editor.close), so without this entry closing settings would fall
+        // through and yank the terminal curtain instead.
+        settings("settings.close", &["Escape", "F2", "F10"]),
+        settings("settings.next_page", &["Tab"]),
+        settings("settings.prev_page", &["Shift+Tab"]),
+        // The popup is operated by the keyboard like everything else here: the
+        // cursor walks the rows and Enter acts on the one under it, rather than
+        // Arrow keys merely scrolling a list the mouse has to finish.
+        //
+        // A focused text or number field keeps all five of these — the frontend
+        // releases them while the caret is in an input, the same way an unbound
+        // key falls through to the editor's textarea (§6).
+        settings("settings.cursor_up", &["ArrowUp"]),
+        settings("settings.cursor_down", &["ArrowDown"]),
+        settings("settings.activate", &["Enter", " "]),
+        settings("settings.prev_option", &["ArrowLeft"]),
+        settings("settings.next_option", &["ArrowRight"]),
+        settings("settings.page_up", &["PageUp"]),
+        settings("settings.page_down", &["PageDown"]),
     ]
 }
 
@@ -383,9 +421,9 @@ mod tests {
         }
     }
 
-    /// Save is the platform's chord, not FAR's F2. The negative half matters as
-    /// much as the positive one: F2 still toggles wrap in the viewer, so a stray
-    /// editor binding for it would be a real ambiguity, not a harmless alias.
+    /// Save is the platform's chord, not FAR's F2. The negative half still
+    /// matters: F2 now opens Settings in the editor, so a stray save binding for
+    /// it would be a real ambiguity, not a harmless alias.
     #[test]
     fn the_editor_saves_with_the_platform_chord() {
         let keymap = default_keymap();
@@ -399,12 +437,46 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert_eq!(save.keys, vec!["Ctrl+s"]);
 
-        assert!(
-            !keymap
-                .iter()
-                .any(|b| b.context == "editor" && b.keys.iter().any(|k| k == "F2")),
-            "F2 no longer belongs to the editor",
-        );
+        let f2: Vec<&str> = keymap
+            .iter()
+            .filter(|b| b.context == "editor" && b.keys.iter().any(|k| k == "F2"))
+            .map(|b| b.action.as_str())
+            .collect();
+        assert_eq!(f2, vec!["settings.open"], "F2 in the editor opens settings, and only that");
+    }
+
+    /// F2 has to reach settings from wherever the keyboard happens to be, or the
+    /// popup is only discoverable from the panels — the same promise F1 makes.
+    #[test]
+    fn settings_opens_from_every_surface() {
+        let keymap = default_keymap();
+        for context in ["panels", "viewer", "editor", "terminal", "help"] {
+            assert!(
+                keymap.iter().any(|b| b.context == context
+                    && b.action == "settings.open"
+                    && b.keys.iter().any(|k| k == "F2")),
+                "F2 does not open settings from {context}",
+            );
+        }
+        // And the key it displaced landed somewhere.
+        let wrap = keymap
+            .iter()
+            .find(|b| b.context == "viewer" && b.action == "viewer.toggle_wrap")
+            .expect("the viewer still toggles wrap");
+        assert_eq!(wrap.keys, vec!["Ctrl+w"]);
+    }
+
+    /// Escape inside the settings popup must close *it*. Every other context
+    /// binds Escape to something destructive-looking (the terminal curtain, or
+    /// closing the viewer/editor), so an omission here would not be a missing
+    /// key — it would be the wrong key firing.
+    #[test]
+    fn settings_binds_its_own_escape() {
+        let close = default_keymap()
+            .into_iter()
+            .find(|b| b.context == "settings" && b.action == "settings.close")
+            .expect("the settings context binds a close action");
+        assert!(close.keys.iter().any(|k| k == "Escape"));
     }
 
     /// Two bindings in one context racing for the same chord would make which

@@ -8,6 +8,25 @@ All notable changes to dimnav are recorded here. The format follows
 
 ### Added
 
+- **F2 opens Settings.** Every value the app persists could only be changed by
+  hand-editing `config.toml` — which is the configuration story the spec asks
+  for, but not a discoverable one: nothing in the app said which settings
+  existed. F2 now opens a popup shaped like the F1 help book, with a page rail
+  down the left. **Appearance** is the first page: a theme picker showing every
+  bundled theme plus whatever `themes/*.toml` holds, each with a preview swatch
+  drawn from its own colours, and the system / light / dark choice beside it.
+  Picking a theme repaints the window immediately — no restart. Changes save as
+  they are made, the way every other preference in the app already behaved, so
+  there is no OK button and nothing to confirm; each row that has been moved off
+  its default grows a reset control.
+
+  Like the help book, the whole thing is **generated from the core**: which
+  pages exist, which settings are on them, their labels, option lists, defaults
+  and validation all live in `fm_core::settings`, and the renderer paints each
+  field by its control kind. A page is written against a new `SettingsPage`
+  extension point beside `HelpTopic`, so a plugin-contributed page later is a
+  registry entry rather than a special case.
+
 - **Themes.** `Config.theme` had been persisted since the config slice while
   nothing read it, and every colour was a literal in the stylesheet — the inverse
   of the rule that theme values are config-driven. The core now resolves the
@@ -27,6 +46,11 @@ All notable changes to dimnav are recorded here. The format follows
   range-toggle gesture below to whole pages and to the ends of the listing.
 
 ### Changed
+
+- **The viewer toggles word wrap with ⌃W instead of F2.** F2 was FAR's wrap key,
+  but it now opens Settings from every other surface, and a key that means one
+  thing in four places and something else in the fifth is worse than an
+  unfamiliar chord.
 
 - **The editor saves with ⌘S instead of F2.** F2 was the Far/MC inheritance, but
   ⌘S is the key macOS users actually reach for; on Windows and Linux the same

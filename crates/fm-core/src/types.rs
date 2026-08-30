@@ -1153,6 +1153,185 @@ pub struct ShortcutItem {
     pub description: String,
 }
 
+// ---------------------------------------------------------------------------
+// Settings (F2) — see `crate::settings`
+// ---------------------------------------------------------------------------
+
+/// The whole settings book: every page, already rendered, with current values,
+/// defaults and option lists filled in.
+///
+/// Shaped exactly like [`HelpBook`], and for the same reason: the renderer picks
+/// a page and paints controls by kind, and makes no decision about which settings
+/// exist, what they are called, or what they may be set to (SPEC §3 — the
+/// frontend is a thin, swappable layer).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct SettingsBook {
+    pub pages: Vec<SettingsPageView>,
+}
+
+/// One page, as it appears in the left-hand rail plus the body it renders.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct SettingsPageView {
+    /// Stable id, e.g. `"appearance"`. Gives a plugin-contributed page a handle
+    /// without the renderer ever switching on it.
+    pub id: String,
+    /// Label for the page rail.
+    pub title: String,
+    pub body: SettingsBody,
+}
+
+/// The content of a page. Tagged the same way as [`HelpBody`] so the generated
+/// TypeScript is a discriminated union the renderer can switch on.
+///
+/// Most pages are plain [`SettingsBody::Fields`]; a page only earns its own
+/// variant when it needs a control no field kind can express — the theme picker
+/// needs colour swatches, so it does.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum SettingsBody {
+    Fields(FieldsBody),
+    Theme(ThemeBody),
+}
+
+/// A page that is nothing but rows of settings.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct FieldsBody {
+    pub groups: Vec<FieldGroup>,
+}
+
+/// A run of related settings within a page, e.g. "Left panel".
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct FieldGroup {
+    /// Stable id, not shown.
+    pub id: String,
+    /// Display heading. Empty for a page whose fields need no sub-heading — the
+    /// renderer then omits it rather than painting a blank line.
+    pub title: String,
+    pub fields: Vec<SettingField>,
+}
+
+/// One setting, everything the renderer needs to paint and edit it.
+///
+/// `id` is the dotted path into [`Config`] — `"appearance"`,
+/// `"watch.debounce_ms"`, `"left_panel.sort_mode"` — and is the same string
+/// `crate::settings::apply` takes, so a control round-trips without the frontend
+/// inventing an identifier scheme of its own.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct SettingField {
+    pub id: String,
+    /// Short label, e.g. `"Show hidden files"`.
+    pub label: String,
+    /// One extra clause of context, or `""` when the label says it all.
+    pub description: String,
+    pub control: FieldControl,
+    pub value: FieldValue,
+    /// What [`Config::default`] holds for this field, so "reset" is renderable
+    /// as a value and not only as an action.
+    pub default: FieldValue,
+    /// Whether `value` still equals `default`. Precomputed because the renderer
+    /// has no business comparing two `FieldValue`s to decide whether to show the
+    /// reset affordance.
+    pub is_default: bool,
+}
+
+/// How a field is edited. The renderer maps each variant to a widget and needs
+/// to know nothing else about the setting.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FieldControl {
+    Toggle,
+    Choice { options: Vec<ChoiceOption> },
+    /// Bounds are inclusive. `unit` is a display suffix (`"ms"`, `"bytes"`) or
+    /// `""`; `step` is what one press of an arrow should move.
+    Number { min: i64, max: i64, step: i64, unit: String },
+    Text { placeholder: String },
+    /// A filesystem path. Distinct from [`FieldControl::Text`] so a renderer that
+    /// can offer a directory picker knows where to offer one.
+    Path,
+}
+
+/// One option of a [`FieldControl::Choice`].
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ChoiceOption {
+    /// The value to send back, matching the field's [`FieldValue`] arm.
+    pub value: FieldValue,
+    pub label: String,
+    pub description: String,
+}
+
+/// A setting's value, in the three shapes every configurable field reduces to.
+///
+/// Deliberately not `toml::Value`: that would leak the storage format into the
+/// IPC contract, and arrays and tables are edited through their own controls
+/// rather than as raw values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Type)]
+#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
+pub enum FieldValue {
+    Bool(bool),
+    Int(i64),
+    Str(String),
+}
+
+/// The Appearance page: which themes exist, which is in force, and the
+/// light/dark preference.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ThemeBody {
+    /// Every theme the app can offer — bundled first, then the user's own.
+    pub themes: Vec<ThemeSummary>,
+    /// The id **actually in force**, which is not always the configured one: an
+    /// id naming nothing falls back rather than failing (§4). The picker marks
+    /// this one, so a config pointing at a deleted theme shows the truth.
+    pub current: String,
+    /// The `system` / `light` / `dark` preference, as an ordinary field so the
+    /// renderer paints it with the same control it uses everywhere else.
+    pub fields: Vec<SettingField>,
+}
+
+/// One theme offered by the picker.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct ThemeSummary {
+    /// What `Config.theme` names — a bundled id or a `themes/<id>.toml` stem.
+    pub id: String,
+    pub name: String,
+    pub source: ThemeSource,
+    /// The appearance this theme pins, if it pins one. A pinned theme overrides
+    /// the light/dark preference, because it defines only that variant — the
+    /// picker says so rather than letting the setting look broken.
+    pub pinned: Option<Appearance>,
+    /// A few resolved colours for the preview swatch, so the picker can show
+    /// what a theme looks like without applying it.
+    pub swatches: Vec<ThemeVar>,
+}
+
+/// Everything a settings write can change, in one payload.
+///
+/// A settings change is not confined to the popup: switching the theme repaints
+/// the window, changing a panel's sort re-orders a listing behind it, and (once
+/// shortcuts are remappable) rebinding a key moves the F-key bar. Rather than
+/// have the renderer guess which of those to re-fetch per field, every write
+/// returns all four and the renderer applies the lot.
+///
+/// Cheap by the standards of where it is used — one keystroke in a settings
+/// dialog, not a hot path — and it means adding a field can never leave a stale
+/// surface behind.
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+pub struct SettingsResult {
+    /// The book, re-rendered: values, `is_default` flags and option lists all
+    /// reflect the write that just happened.
+    pub book: SettingsBook,
+    pub snapshot: AppSnapshot,
+    pub palette: Palette,
+    pub keymap: Vec<KeyBinding>,
+}
+
+/// Where a theme came from. Only a user theme can be edited or deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeSource {
+    Bundled,
+    User,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

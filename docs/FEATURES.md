@@ -357,6 +357,58 @@ Known limits:
 
 ---
 
+### Settings (§7)
+
+- [x] **F2 opens a settings popup from every surface** — panels, viewer, editor,
+      the focused terminal prompt, and from the F1 help screen. Shaped like the
+      help book: pages listed vertically on the left, **Tab** / **Shift+Tab** to
+      cycle them, **Esc** to close, restoring keyboard focus to whatever owned it
+- [x] The two large popups **swap rather than stack** — F2 in help opens
+      settings, F1 in settings opens help, and neither is ever underneath the
+      other. Neither opens over a file-operation dialog: those are questions
+      awaiting an answer
+- [x] Operated by the keyboard, not only the mouse: **↑ / ↓** walk the rows,
+      **Enter** or **Space** changes the setting under the cursor, **← / →**
+      step a multiple choice. A focused text or number field keeps those five
+      keys and the popup keeps everything else, so Esc still closes and Tab still
+      changes page from inside one
+- [x] **Changes apply and persist immediately** — the contract every existing
+      preference already had (`set_view_mode`, `set_sort_mode`,
+      `set_trash_default` all write `config.toml` on the spot). No OK button and
+      nothing to confirm; a row moved off its default grows a reset control
+      instead
+- [x] **Appearance page**: a theme **picker** listing every bundled theme plus
+      whatever `themes/*.toml` holds, each with a preview swatch resolved through
+      the same code path that would paint it — so the preview cannot disagree
+      with the result. Picking one repaints the window with no restart
+- [x] A theme that **pins** an appearance says so on its row, so the light/dark
+      control beside it reads as overridden rather than broken
+- [x] The picker marks the theme **actually in force**, not the configured id: a
+      config naming a deleted theme highlights what is really painted (§4)
+- [x] An id that names nothing is **refused rather than stored**. `resolve` falls
+      back for an unknown id, which is right for painting and wrong for
+      persisting — writing one would leave the picker showing one theme and the
+      app painting another
+- [x] A user theme that is missing, unreadable or malformed is **skipped from the
+      list**, not reported: the picker offers what can be applied, and a
+      half-written file cannot stop the page rendering (§7)
+- [x] **Core-authored**, like the help book: `fm_core::settings` owns which pages
+      exist, which settings are on them, their labels, option lists, defaults and
+      validation, and the renderer paints each field by its control kind. There
+      is no list of settings in the frontend
+- [x] A field's id is its **dotted path into `Config`** (`"appearance"`), and the
+      same string addresses it for reading, writing and resetting — so there is
+      no second identifier scheme to keep in step. Reset is `apply` with the
+      default looked up, not a second assignment per field, so a validation rule
+      cannot cover one and miss the other
+- [x] Pages are built against a **`SettingsPage` extension point** (§6a) beside
+      `HelpTopic`, taking the implemented extension points to four. A test asserts
+      every field the book paints round-trips through its own id, so a mistyped
+      one fails CI rather than dropping a row silently
+- [x] **F2 displaced the viewer's word wrap**, which moved to **⌃W**. Both bars
+      followed on their own — they are generated from the live keymap — and the
+      F1 shortcut list gained a Settings section the same way
+
 ### Configuration (§7)
 
 - [x] **A broken line in `config.toml` costs that line, not the file.** `toml::from_str`
@@ -431,6 +483,50 @@ user table to hang off, and building one is its own slice (§7).
 - [ ] Multiple terminal sessions / tabs
 - [ ] Windows and Linux shell handling (§8 Phase 4)
 
+### Settings UI (F2)
+
+The framework and the Appearance page have **shipped** — see
+[Settings (§7)](#settings-7) under Implemented. What is left:
+
+Everything the app persists was configurable **only** by hand-editing
+`~/Library/Application Support/dimnav/config.toml` today. That is the
+configuration story §7 asks for, but it is not a discoverable one: nothing in the
+app said which settings existed. One of them still is not config-driven at all —
+`Config` carries no shortcuts, so `get_keymap` returns the compiled-in
+`default_keymap()`, which is the exact inverse of the CLAUDE.md rule that
+shortcuts and theme values come from config.
+
+**F2** opens a large popup shaped like the F1 help book: a vertical page rail,
+one page per configurable area. The core authors the whole settings model as data
+— pages, field labels, option lists, defaults, validation — and the renderer
+paints controls by kind, the arrangement that already keeps the help book free of
+business logic (§3). Pages are written against a new `SettingsPage` extension
+point beside `HelpTopic` (§6a). Changes apply and persist immediately, the way
+every existing `set_*` command already behaves; Esc closes, and each row resets
+to its default on its own.
+
+- [ ] **Shortcuts page** (§6) — makes shortcuts config-driven for the first time.
+      `Config` gains a `[[shortcuts]]` **override** list, not a keymap dump, so a
+      later release can still add bindings without a stale copy shadowing them;
+      `config::keymap` merges the overrides under the defaults, and `get_keymap`
+      and the F1 help screen both read that instead of `default_keymap()`.
+      Remapping by pressing the chord, per-row reset, and **conflict detection**
+      within a context. *Supersedes the previous "keybinding remapping and
+      conflict detection" item*
+- [ ] **The remaining pages** — Panels (start directory, sort, hidden files, view
+      mode, per panel), Files (Trash default, the editor size cap, the
+      `[[associations]]` table), Viewer & Editor, Terminal (scrollback, shell),
+      Watching (all eight `[watch]` values). Guarded by a two-way test in the
+      spirit of `catalog_covers_the_default_keymap`: every path in a serialized
+      `Config::default()` must be claimed by some page, so a new config field
+      cannot ship without a row in the UI to reach it
+- [ ] **Custom theme editor** — duplicate a bundled theme into a user theme, then
+      override any of the 23 palette tokens, with live preview and per-token
+      revert to the base. Only the keys actually changed are written, so a
+      UI-authored `themes/<id>.toml` stays as small as a hand-written one. The
+      values are not all hex — `accent-dim` is an `rgba(…)` — so each row needs a
+      swatch *and* a text field, or alpha is silently destroyed
+
 ### Elsewhere (from SPEC §8)
 
 - [ ] **Window transparency** (§4) — the palette landed; opacity needs
@@ -438,13 +534,6 @@ user table to hang off, and building one is its own slice (§7).
       anything
 - [ ] Configurable **fonts** and row height (§4) — the theme file is the place for
       them; nothing reads a font token yet
-- [ ] A theme **picker** in the UI — themes are chosen by editing `config.toml`
-      today, which is the app's configuration story (§7) but not the friendliest
-      one
-- [ ] Keybinding remapping and conflict detection (§6) — including the terminal
-      bindings added in this slice. `get_keymap` and the F1 help screen both read
-      `default_keymap()` today, so help already renders whatever the keymap says;
-      remapping only has to change that one source for help to follow
 - [ ] Selectable shortcut schemas (§6) — the F1 About topic already reports which
       schema is applied, currently always "Default"
 - [ ] More help topics (§6) — the `HelpTopic` extension point is in place; only

@@ -276,11 +276,12 @@ A plugin should be able to, at minimum:
 
 - Config stored in a human-readable file format (likely TOML or JSON) in the standard OS config directory (`~/Library/Application Support/<AppName>/` on macOS).
 - Configurable areas:
-  - **Keybindings** — override any default shortcut.
+  - **Shortcuts** — override any default key chord.
   - **Themes** — colors, fonts, transparency level; select from bundled themes or define a custom one.
   - **File type → application mapping** — associate extensions/MIME types with specific external editors/viewers, with support for multiple mappings (e.g., default open vs. explicit "view" vs. explicit "edit" actions, once that mode is introduced).
   - **Panel behavior & persisted UI state** — default starting directories; per-panel column/view mode, sort mode, and hidden-file visibility (all persisted across restarts); global Trash-checkbox state.
 - Config should have sane, working defaults out of the box — the app must be fully usable with zero configuration.
+- The file stays hand-editable, but every configurable area above is also reachable from the **F2 settings popup**, so a setting can be found without knowing it exists. The popup is generated from the core the way the F1 help screen is (§6) — a setting the core knows about appears there without a second list to maintain.
 
 ---
 

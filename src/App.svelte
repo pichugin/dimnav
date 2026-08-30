@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
-  import { nav, ops, open, viewer, editor, terminal, help, theme, updates, events } from "./lib/ipc";
+  import { nav, ops, open, viewer, editor, terminal, help, settings, theme, updates, events } from "./lib/ipc";
   import type {
     AppSnapshot,
     EditDoc,
@@ -19,6 +19,9 @@
     PanelState,
     Resolution,
     SearchDirection,
+    SettingsBook,
+    SettingsResult,
+    FieldValue,
     SortMode,
     TerminalState,
     UpdateInfo,
@@ -29,6 +32,7 @@
   import Viewer from "./lib/Viewer.svelte";
   import Editor from "./lib/Editor.svelte";
   import Terminal from "./lib/Terminal.svelte";
+  import Settings from "./lib/Settings.svelte";
   import type { UnlistenFn } from "@tauri-apps/api/event";
   // Vite rewrites this to a hashed bundle URL. Generated from the same emblem as
   // the app icon by `scripts/make-icon.py` — regenerate both together.
@@ -137,6 +141,17 @@
   let unsavedPrompt = $state(false);
   let editorRef = $state<Editor | null>(null);
 
+  // --- Settings (F2, §7) ----------------------------------------------------
+  // The book comes from the core with every page, label, option list, default
+  // and validation rule already decided; nothing here knows which settings
+  // exist. Writes return everything they may have changed — the re-rendered
+  // book, the snapshot, the palette and the keymap — and all four are applied.
+  let settingsOpen = $state(false);
+  let settingsPage = $state(0);
+  let settingsBook = $state<SettingsBook | null>(null);
+  let settingsContentEl = $state<HTMLElement | null>(null);
+  let settingsRef = $state<Settings | null>(null);
+
   // --- Help (F1, §6) --------------------------------------------------------
   // The whole book comes from the core already filtered — topics, the shortcut
   // list derived from the live keymap, and the search matching. Nothing here
@@ -155,27 +170,32 @@
   let updateInstalling = $state(false);
   let updateError = $state("");
 
-  // Every modal that owns the keyboard until it is answered. F1 defers to these:
-  // they are questions, and stacking help on top of one strands the answer.
+  // Every modal that owns the keyboard until it is answered. F1 and F2 both
+  // defer to these: they are questions, and stacking a full-window popup on top
+  // of one strands the answer.
   const modalUp = $derived(
     !!(destPrompt || textPrompt || activeOp || prompt || deleteConfirm || saveConflict || unsavedPrompt),
   );
 
-  // Which keymap context owns the keyboard right now (§6). Help wins outright —
-  // it is reachable from every surface, so while it is up nothing underneath it
-  // should see a key. Otherwise the embedded surfaces win over the terminal: the
-  // viewer/editor cover the whole window, so while one is open it is the only
-  // thing the keyboard can sensibly reach.
+  // Which keymap context owns the keyboard right now (§6). The two big popups
+  // win outright — each is reachable from every surface, so while one is up
+  // nothing underneath it should see a key. They never overlap: F2 in help and
+  // F1 in settings swap them rather than stacking, so the order between these
+  // two arms is arbitrary. Otherwise the embedded surfaces win over the
+  // terminal: the viewer/editor cover the whole window, so while one is open it
+  // is the only thing the keyboard can sensibly reach.
   const keyContext = $derived(
-    helpOpen
-      ? "help"
-      : editorDoc
-        ? "editor"
-        : viewerPage
-          ? "viewer"
-          : snapshot.terminal.focused
-            ? "terminal"
-            : "panels",
+    settingsOpen
+      ? "settings"
+      : helpOpen
+        ? "help"
+        : editorDoc
+          ? "editor"
+          : viewerPage
+            ? "viewer"
+            : snapshot.terminal.focused
+              ? "terminal"
+              : "panels",
   );
 
   // context -> chord string -> action id, built from the core-provided keymap.
@@ -1094,6 +1114,133 @@
   // --- Help (F1, §6) --------------------------------------------------------
 
   /**
+   * Open the settings popup (F2, §7).
+   *
+   * The book is fetched *before* the flag is set, unlike help: setting it first
+   * and awaiting would put `keyContext` into "settings" while the body is still
+   * null, so a failed fetch would render nothing and leave the app looking
+   * frozen. Here a failure simply reports and nothing opens.
+   */
+  async function openSettings() {
+    // Settings is reached without a snapshot-returning command, so like help it
+    // has to close an open quick-search box by hand (§5.9).
+    const side = snapshot.active;
+    if (snapshot[side].search) await searchClose(side);
+    try {
+      settingsBook = await settings.book();
+    } catch (err) {
+      status = `error: ${String(err)}`;
+      return;
+    }
+    settingsPage = 0;
+    settingsOpen = true;
+    // See the matching note in `openHelp`: cleared directly, never via
+    // `closeHelp`, so DOM focus is not handed back to the surface underneath.
+    helpOpen = false;
+  }
+
+  function closeSettings() {
+    settingsOpen = false;
+    // Hand the DOM focus back to whoever had it, exactly as closeHelp does —
+    // the core's idea of who owns the keyboard never changed while the popup
+    // was up, so nothing else will do this.
+    tick().then(() => {
+      if (editorDoc) editorRef?.refocus();
+      else if (snapshot.terminal.focused) terminalRef?.focusInput();
+    });
+  }
+
+  /**
+   * Apply everything a settings write touched. The core returns the re-rendered
+   * book together with the snapshot, palette and keymap it may have changed, so
+   * a theme switch repaints and a future rebind moves the F-key bar without
+   * this function learning which field did what.
+   */
+  function receiveSettings(r: SettingsResult) {
+    settingsBook = r.book;
+    snapshot = r.snapshot;
+    applyPalette(r.palette);
+    keymaps = buildKeymap(r.keymap);
+    hints = buildHints(r.keymap);
+  }
+
+  async function setSetting(id: string, value: FieldValue) {
+    try {
+      receiveSettings(await settings.set(id, value));
+    } catch (err) {
+      status = `error: ${String(err)}`;
+    }
+  }
+
+  async function resetSetting(id: string) {
+    try {
+      receiveSettings(await settings.reset(id));
+    } catch (err) {
+      status = `error: ${String(err)}`;
+    }
+  }
+
+  /**
+   * Actions a focused text or number field keeps for itself: the caret keys and
+   * Enter. Everything else in the settings context is still the popup's, so Esc
+   * closes and Tab changes page from inside a field.
+   *
+   * This is the same rule the editor follows for unbound keys — a surface that
+   * hosts text entry must not swallow the keys that edit it (§6).
+   */
+  const SETTINGS_CARET_ACTIONS = new Set([
+    "settings.cursor_up",
+    "settings.cursor_down",
+    "settings.activate",
+    "settings.prev_option",
+    "settings.next_option",
+  ]);
+
+  function handleSettingsKey(action: string): boolean {
+    const count = settingsBook?.pages.length ?? 0;
+    switch (action) {
+      case "settings.cursor_up":
+        settingsRef?.move(-1);
+        return true;
+      case "settings.cursor_down":
+        settingsRef?.move(1);
+        return true;
+      case "settings.activate":
+        settingsRef?.activate();
+        return true;
+      case "settings.prev_option":
+        settingsRef?.adjust(-1);
+        return true;
+      case "settings.next_option":
+        settingsRef?.adjust(1);
+        return true;
+      case "settings.close":
+        closeSettings();
+        return true;
+      case "help.open":
+        // The two popups swap rather than stack (config::default_keymap).
+        // `openHelp` clears `settingsOpen` itself, for the focus reason noted
+        // there — going through `closeSettings` would hand focus back to the
+        // surface underneath while help is still up.
+        void openHelp();
+        return true;
+      case "settings.next_page":
+        if (count) settingsPage = (settingsPage + 1) % count;
+        return true;
+      case "settings.prev_page":
+        if (count) settingsPage = (settingsPage - 1 + count) % count;
+        return true;
+      case "settings.page_up":
+        settingsRef?.scrollBy(-(settingsContentEl?.clientHeight ?? 0) * 0.9);
+        return true;
+      case "settings.page_down":
+        settingsRef?.scrollBy((settingsContentEl?.clientHeight ?? 0) * 0.9);
+        return true;
+    }
+    return false;
+  }
+
+  /**
    * Fetch the book for the current query. The core does the filtering; this only
    * drops responses that arrived out of order, so fast typing can't leave the
    * list showing the results of a prefix the user has already moved past.
@@ -1116,6 +1263,12 @@
     const side = snapshot.active;
     if (snapshot[side].search) await searchClose(side);
     helpOpen = true;
+    // The two popups swap rather than stack. Clearing the other one *here*
+    // rather than calling its close function is deliberate: closing restores DOM
+    // focus to the surface underneath, and with a popup still up that would put
+    // the caret back in the editor's textarea, where unbound keys would land as
+    // typed text.
+    settingsOpen = false;
     helpTopic = 0;
     helpQuery = "";
     await loadHelp();
@@ -1174,6 +1327,12 @@
     switch (action) {
       case "help.close":
         closeHelp();
+        return true;
+      case "settings.open":
+        // F2 in help swaps to settings rather than stacking on top of it.
+        // `openSettings` clears `helpOpen` itself — see the note in `openHelp`
+        // about why this must not go through `closeHelp`.
+        void openSettings();
         return true;
       case "help.next_topic":
         if (count) helpTopic = (helpTopic + 1) % count;
@@ -1296,10 +1455,20 @@
 
   async function onKeydown(e: KeyboardEvent) {
     shiftHeld = e.shiftKey;
-    // Help owns the keyboard outright while it is up — it can be opened over any
-    // surface, so nothing underneath may act on a key. Unbound keys fall through
-    // untouched to the focused search field, exactly as they do at the terminal
-    // prompt; that is what lets the user simply type to filter.
+    // The two big popups own the keyboard outright while up — either can be
+    // opened over any surface, so nothing underneath may act on a key. Unbound
+    // keys fall through untouched to whatever field is focused, exactly as they
+    // do at the terminal prompt; that is what lets the user type to filter the
+    // shortcut list, or into a settings text field.
+    if (settingsOpen) {
+      const bound = keymaps.settings?.[chord(e)];
+      // A focused field owns the caret keys; the popup keeps everything else,
+      // so Esc still closes and Tab still changes page from inside one.
+      const inField = (e.target as HTMLElement | null)?.tagName === "INPUT";
+      if (bound && inField && SETTINGS_CARET_ACTIONS.has(bound)) return;
+      if (bound && handleSettingsKey(bound)) e.preventDefault();
+      return;
+    }
     if (helpOpen) {
       const bound = keymaps.help?.[chord(e)];
       if (bound && handleHelpKey(bound)) e.preventDefault();
@@ -1309,13 +1478,22 @@
     // that Backspace and Escape reach the box, but only ever consuming keys it
     // has a use for — F1 itself is not one, so help still opens over a search.
     if (searchKeydown(e)) return;
-    // F1 from any surface (§6). Handled here rather than in each surface's own
-    // handler so viewer/editor/terminal need to know nothing about help. The
-    // modals are the deliberate exception: they are questions awaiting an answer.
-    if (!modalUp && keymaps[keyContext]?.[chord(e)] === "help.open") {
-      e.preventDefault();
-      void openHelp();
-      return;
+    // F1 and F2 from any surface (§6/§7). Handled here rather than in each
+    // surface's own handler so viewer/editor/terminal need to know nothing about
+    // either popup. The modals are the deliberate exception: they are questions
+    // awaiting an answer, and stacking a full-window popup over one strands it.
+    if (!modalUp) {
+      const bound = keymaps[keyContext]?.[chord(e)];
+      if (bound === "help.open") {
+        e.preventDefault();
+        void openHelp();
+        return;
+      }
+      if (bound === "settings.open") {
+        e.preventDefault();
+        void openSettings();
+        return;
+      }
     }
     // Text prompts (destination, mkdir, rename, search, goto) own the keyboard
     // via their focused <input>; let them be.
@@ -1584,6 +1762,7 @@
     (
       [
         ["help.open", "Help"],
+        ["settings.open", "Config"],
         ["open.view", "View"],
         ["open.edit", "Edit"],
         ["op.copy", "Copy"],
@@ -2065,6 +2244,21 @@
         </footer>
       </div>
     </div>
+  {/if}
+
+  <!-- Settings (F2, §7). Reachable from every surface, like help, and never on
+       screen at the same time as it — F2 in help and F1 in settings swap them.
+       Every label, option and default below comes from the core's settings
+       book; this only decides that the popup goes here. -->
+  {#if settingsOpen && settingsBook}
+    <Settings
+      bind:this={settingsRef}
+      book={settingsBook}
+      bind:page={settingsPage}
+      bind:contentEl={settingsContentEl}
+      onSet={setSetting}
+      onReset={resetSetting}
+    />
   {/if}
 </main>
 

@@ -175,6 +175,20 @@ const HELP: &[ActionInfo] = &[
     a("help.page_down", "Page down", ""),
 ];
 
+const SETTINGS: &[ActionInfo] = &[
+    a("settings.open", "Open settings", "Available from every surface, like help."),
+    a("settings.close", "Close settings", "Changes are already saved — there is nothing to confirm."),
+    a("settings.next_page", "Next page", "Cycles round to the first page past the last."),
+    a("settings.prev_page", "Previous page", "Cycles round to the last page before the first."),
+    a("settings.cursor_up", "Move up", "Steps to the previous setting on the page."),
+    a("settings.cursor_down", "Move down", "Steps to the next setting on the page."),
+    a("settings.activate", "Change the setting under the cursor", "Picks a theme, flips a toggle, or takes the next choice."),
+    a("settings.prev_option", "Previous choice", "Steps a multiple-choice setting back, or a number down."),
+    a("settings.next_option", "Next choice", "Steps a multiple-choice setting forward, or a number up."),
+    a("settings.page_up", "Page up", ""),
+    a("settings.page_down", "Page down", ""),
+];
+
 const CATALOG: &[ActionCategory] = &[
     ActionCategory { id: "cursor", title: "Cursor motion", actions: CURSOR },
     ActionCategory { id: "navigation", title: "Directory navigation", actions: NAVIGATION },
@@ -190,6 +204,7 @@ const CATALOG: &[ActionCategory] = &[
     ActionCategory { id: "viewer_cmd", title: "Commands", actions: VIEWER_CMD },
     ActionCategory { id: "editor_cmd", title: "Commands", actions: EDITOR_CMD },
     ActionCategory { id: "help", title: "Help", actions: HELP },
+    ActionCategory { id: "settings", title: "Settings", actions: SETTINGS },
 ];
 
 /// Every action the app knows about, grouped and in display order.

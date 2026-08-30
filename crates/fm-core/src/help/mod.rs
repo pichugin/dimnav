@@ -56,6 +56,7 @@ const SECTIONS: &[(&str, &str)] = &[
     ("editor", "Editor"),
     ("terminal", "Terminal"),
     ("help", "Help"),
+    ("settings", "Settings"),
 ];
 
 /// Extra words one part of a chord should be findable by, so `"cmd"` finds `⌘`
@@ -400,7 +401,7 @@ mod tests {
         let titles: Vec<&str> = body.sections.iter().map(|s| s.title.as_str()).collect();
         assert_eq!(
             titles,
-            vec!["Panels", "Quick search", "Viewer", "Editor", "Terminal", "Help"]
+            vec!["Panels", "Quick search", "Viewer", "Editor", "Terminal", "Help", "Settings"]
         );
     }
 

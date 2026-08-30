@@ -40,6 +40,26 @@ export const commands = {
 	 */
 	getHelp: (query: string) => __TAURI_INVOKE<HelpBook>("get_help", { query }),
 	/**
+	 *  The F2 settings book: every configurable value, already rendered (§7).
+	 * 
+	 *  The core decides which settings exist, what they are called, what they may be
+	 *  set to and what their defaults are; this only supplies the OS appearance,
+	 *  which is the one fact `fm-core` cannot read for itself (same arrangement as
+	 *  [`get_palette`]).
+	 */
+	getSettings: () => typedError<SettingsBook, string>(__TAURI_INVOKE("get_settings")),
+	/**
+	 *  Write one setting and persist it (§7).
+	 * 
+	 *  Applied immediately, like every other preference in the app — there is no
+	 *  staged-then-confirmed state for a settings dialog to get out of step with.
+	 *  Validation is the core's: an id or a value it refuses leaves the config
+	 *  untouched and returns the reason.
+	 */
+	setSetting: (id: string, value: FieldValue) => typedError<SettingsResult, string>(__TAURI_INVOKE("set_setting", { id, value })),
+	/**  Restore one setting to its default and persist that (§7). */
+	resetSetting: (id: string) => typedError<SettingsResult, string>(__TAURI_INVOKE("reset_setting", { id })),
+	/**
 	 *  Open one of the About topic's links in the user's browser (§6).
 	 * 
 	 *  Restricted to `http`/`https` on purpose. The webview only ever passes URLs the
@@ -440,6 +460,14 @@ export type AppearanceMode =
  */
 "system" | "light" | "dark";
 
+/**  One option of a [`FieldControl::Choice`]. */
+export type ChoiceOption = {
+	/**  The value to send back, matching the field's [`FieldValue`] arm. */
+	value: FieldValue,
+	label: string,
+	description: string,
+};
+
 /**
  *  Payload for the collision-prompt event. `multiple` enables the `*_all`
  *  resolution choices in the dialog (§5.4a).
@@ -610,6 +638,48 @@ export type Eol = "lf" | "crlf" | "cr";
  *  (§5.6).
  */
 export type ErrorResolution = "retry" | "skip" | "skip_all" | "cancel" | "elevate";
+
+/**
+ *  How a field is edited. The renderer maps each variant to a widget and needs
+ *  to know nothing else about the setting.
+ */
+export type FieldControl = { kind: "toggle" } | { kind: "choice"; options: ChoiceOption[] } | 
+/**
+ *  Bounds are inclusive. `unit` is a display suffix (`"ms"`, `"bytes"`) or
+ *  `""`; `step` is what one press of an arrow should move.
+ */
+{ kind: "number"; min: number; max: number; step: number; unit: string } | { kind: "text"; placeholder: string } | 
+/**
+ *  A filesystem path. Distinct from [`FieldControl::Text`] so a renderer that
+ *  can offer a directory picker knows where to offer one.
+ */
+{ kind: "path" };
+
+/**  A run of related settings within a page, e.g. "Left panel". */
+export type FieldGroup = {
+	/**  Stable id, not shown. */
+	id: string,
+	/**
+	 *  Display heading. Empty for a page whose fields need no sub-heading — the
+	 *  renderer then omits it rather than painting a blank line.
+	 */
+	title: string,
+	fields: SettingField[],
+};
+
+/**
+ *  A setting's value, in the three shapes every configurable field reduces to.
+ * 
+ *  Deliberately not `toml::Value`: that would leak the storage format into the
+ *  IPC contract, and arrays and tables are edited through their own controls
+ *  rather than as raw values.
+ */
+export type FieldValue = { kind: "bool"; value: boolean } | { kind: "int"; value: number } | { kind: "str"; value: string };
+
+/**  A page that is nothing but rows of settings. */
+export type FieldsBody = {
+	groups: FieldGroup[],
+};
 
 /**
  *  One file-type → handler mapping (§5.5 / §7). Associates a set of extensions
@@ -976,6 +1046,94 @@ export type SaveOutcome = { kind: "saved" } | { kind: "conflict"; value: string 
 /**  Search direction for F7 / Shift+F7. */
 export type SearchDirection = "forward" | "backward";
 
+/**
+ *  One setting, everything the renderer needs to paint and edit it.
+ * 
+ *  `id` is the dotted path into [`Config`] — `"appearance"`,
+ *  `"watch.debounce_ms"`, `"left_panel.sort_mode"` — and is the same string
+ *  `crate::settings::apply` takes, so a control round-trips without the frontend
+ *  inventing an identifier scheme of its own.
+ */
+export type SettingField = {
+	id: string,
+	/**  Short label, e.g. `"Show hidden files"`. */
+	label: string,
+	/**  One extra clause of context, or `""` when the label says it all. */
+	description: string,
+	control: FieldControl,
+	value: FieldValue,
+	/**
+	 *  What [`Config::default`] holds for this field, so "reset" is renderable
+	 *  as a value and not only as an action.
+	 */
+	default: FieldValue,
+	/**
+	 *  Whether `value` still equals `default`. Precomputed because the renderer
+	 *  has no business comparing two `FieldValue`s to decide whether to show the
+	 *  reset affordance.
+	 */
+	is_default: boolean,
+};
+
+/**
+ *  The content of a page. Tagged the same way as [`HelpBody`] so the generated
+ *  TypeScript is a discriminated union the renderer can switch on.
+ * 
+ *  Most pages are plain [`SettingsBody::Fields`]; a page only earns its own
+ *  variant when it needs a control no field kind can express — the theme picker
+ *  needs colour swatches, so it does.
+ */
+export type SettingsBody = { kind: "fields"; value: FieldsBody } | { kind: "theme"; value: ThemeBody };
+
+/**
+ *  The whole settings book: every page, already rendered, with current values,
+ *  defaults and option lists filled in.
+ * 
+ *  Shaped exactly like [`HelpBook`], and for the same reason: the renderer picks
+ *  a page and paints controls by kind, and makes no decision about which settings
+ *  exist, what they are called, or what they may be set to (SPEC §3 — the
+ *  frontend is a thin, swappable layer).
+ */
+export type SettingsBook = {
+	pages: SettingsPageView[],
+};
+
+/**  One page, as it appears in the left-hand rail plus the body it renders. */
+export type SettingsPageView = {
+	/**
+	 *  Stable id, e.g. `"appearance"`. Gives a plugin-contributed page a handle
+	 *  without the renderer ever switching on it.
+	 */
+	id: string,
+	/**  Label for the page rail. */
+	title: string,
+	body: SettingsBody,
+};
+
+/**
+ *  Everything a settings write can change, in one payload.
+ * 
+ *  A settings change is not confined to the popup: switching the theme repaints
+ *  the window, changing a panel's sort re-orders a listing behind it, and (once
+ *  shortcuts are remappable) rebinding a key moves the F-key bar. Rather than
+ *  have the renderer guess which of those to re-fetch per field, every write
+ *  returns all four and the renderer applies the lot.
+ * 
+ *  Cheap by the standards of where it is used — one keystroke in a settings
+ *  dialog, not a hot path — and it means adding a field can never leave a stale
+ *  surface behind.
+ */
+export type SettingsResult = {
+	/**
+	 *  The book, re-rendered: values, `is_default` flags and option lists all
+	 *  reflect the write that just happened.
+	 */
+	book: SettingsBook,
+	snapshot: AppSnapshot,
+	palette: Palette,
+	keymap: KeyBinding[],
+};
+
 /**  A run of related shortcuts within a section, e.g. "Cursor motion". */
 export type ShortcutGroup = {
 	category: string,
@@ -1175,6 +1333,48 @@ export type TerminalStatus =
 export type TextEncoding = "utf8" | 
 /**  UTF-8 with a byte-order mark, which must be preserved on save. */
 "utf8_bom" | "utf16_le" | "utf16_be" | "latin1";
+
+/**
+ *  The Appearance page: which themes exist, which is in force, and the
+ *  light/dark preference.
+ */
+export type ThemeBody = {
+	/**  Every theme the app can offer — bundled first, then the user's own. */
+	themes: ThemeSummary[],
+	/**
+	 *  The id **actually in force**, which is not always the configured one: an
+	 *  id naming nothing falls back rather than failing (§4). The picker marks
+	 *  this one, so a config pointing at a deleted theme shows the truth.
+	 */
+	current: string,
+	/**
+	 *  The `system` / `light` / `dark` preference, as an ordinary field so the
+	 *  renderer paints it with the same control it uses everywhere else.
+	 */
+	fields: SettingField[],
+};
+
+/**  Where a theme came from. Only a user theme can be edited or deleted. */
+export type ThemeSource = "bundled" | "user";
+
+/**  One theme offered by the picker. */
+export type ThemeSummary = {
+	/**  What `Config.theme` names — a bundled id or a `themes/<id>.toml` stem. */
+	id: string,
+	name: string,
+	source: ThemeSource,
+	/**
+	 *  The appearance this theme pins, if it pins one. A pinned theme overrides
+	 *  the light/dark preference, because it defines only that variant — the
+	 *  picker says so rather than letting the setting look broken.
+	 */
+	pinned: Appearance | null,
+	/**
+	 *  A few resolved colours for the preview swatch, so the picker can show
+	 *  what a theme looks like without applying it.
+	 */
+	swatches: ThemeVar[],
+};
 
 /**  One resolved CSS custom property: `name` without the leading `--`. */
 export type ThemeVar = {

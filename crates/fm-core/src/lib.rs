@@ -25,6 +25,7 @@
 //! - [`help`]     — the F1 help book: About + the live shortcut list (§6).
 //! - [`keys`]     — how a chord is spelled for a human: `Meta+s` → `⌘S` (§6).
 //! - [`plugin`]   — extension-point traits (Phase 1: definitions only, no loader).
+//! - [`settings`] — the F2 settings book: every configurable value, as data (§7).
 //! - [`view`]     — the embedded viewer/editor: type probe, paged sessions, docs (§5.5).
 //! - [`terminal`] — the embedded command line: scrollback, history, run status (§5.7).
 //! - [`theme`]    — colour values resolved from config into a paintable palette (§4).
@@ -41,6 +42,7 @@ pub mod nav;
 pub mod ops;
 pub mod open;
 pub mod plugin;
+pub mod settings;
 pub mod state;
 pub mod terminal;
 pub mod theme;

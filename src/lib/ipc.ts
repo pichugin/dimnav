@@ -18,6 +18,7 @@ import type {
   PanelId,
   Resolution,
   SearchDirection,
+  FieldValue,
   SortMode,
   ViewMode,
   ViewMotion,
@@ -68,6 +69,20 @@ export type {
   SaveOutcome,
   TextEncoding,
   Eol,
+  // Settings (F2) (§7)
+  SettingsBook,
+  SettingsPageView,
+  SettingsBody,
+  SettingsResult,
+  FieldsBody,
+  FieldGroup,
+  SettingField,
+  FieldControl,
+  FieldValue,
+  ChoiceOption,
+  ThemeBody,
+  ThemeSummary,
+  ThemeSource,
   // Help (F1) (§6)
   AppInfo,
   HelpBook,
@@ -256,6 +271,23 @@ export const help = {
    * way back.
    */
   openLink: (url: string) => unwrap(commands.openLink(url)),
+};
+
+/**
+ * Settings (F2, §7). The core authors the whole book — which settings exist,
+ * their labels, option lists, defaults and validation — so this is pure
+ * marshalling and the renderer holds no settings content of its own.
+ *
+ * Every write returns a {@link SettingsResult}: the re-rendered book plus the
+ * snapshot, palette and keymap it may have changed. Apply all four rather than
+ * guessing which one a given field touched.
+ */
+export const settings = {
+  book: () => unwrap(commands.getSettings()),
+  /** Write one setting, addressed by its dotted config path. */
+  set: (id: string, value: FieldValue) => unwrap(commands.setSetting(id, value)),
+  /** Restore one setting to the value the app ships with. */
+  reset: (id: string) => unwrap(commands.resetSetting(id)),
 };
 
 /**
